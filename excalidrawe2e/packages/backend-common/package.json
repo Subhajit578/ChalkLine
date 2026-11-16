@@ -3,7 +3,10 @@
   "version": "1.0.0",
   "main": "index.js",
   "exports": {
-    "./config": "./src/index.ts",
+    "./config": {
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
     "./resilience": {
       "types": "./src/resilience.d.ts",
       "default": "./src/resilience.js"
@@ -13,10 +16,11 @@
     "typescript": "^5.9.2"
   },
   "devDependencies": {
-    "@repo/typescript-config": "workspace:*"
+    "@repo/typescript-config": "workspace:*",
+    "@types/node": "^22"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "tsc -b"
   },
   "keywords": [],
   "author": "",

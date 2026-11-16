@@ -4,7 +4,10 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
+  /// Runtime connection. On Neon, the pooled host (-pooler).
+  url       = env("DATABASE_URL")
+  /// Used by migrations: same database, no pooler (migrations need a stable connection).
+  directUrl = env("DIRECT_URL")
 }
 
 model User {
@@ -39,12 +42,20 @@ model User {
 
 model Room {
   id        Int          @id @default(autoincrement())
+  /// Display name only; does not grant access.
   slug      String       @unique
+  /// Random, unguessable link id (/canvas/<shareId>); knowing it lets someone
+  /// join. Separate from `slug` so renames keep links working, and from `id`,
+  /// which is sequential.
+  shareId   String       @unique @default(uuid())
   adminId   String
   admin     User         @relation(fields: [adminId], references: [id])
   createdAt DateTime     @default(now())
   shapes    Shape[]
   members   RoomMember[]
+
+  /// dashboard lists rooms by owner
+  @@index([adminId])
 }
 
 /// Someone who opened a room they do not own, so it can be listed on their
@@ -59,6 +70,8 @@ model RoomMember {
   user     User     @relation(fields: [userId], references: [id])
 
   @@unique([roomId, userId])
+  /// "shared with me" lookup by user (the unique index above leads with roomId)
+  @@index([userId])
 }
 
 /// An uploaded image, addressed by the SHA-256 of its bytes.
@@ -94,6 +107,8 @@ model File {
   user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([createdAt])
+  /// storage quota sums sizes by uploader
+  @@index([userId])
 }
 
 model Shape {
@@ -114,4 +129,7 @@ model Shape {
   user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   room Room @relation(fields: [roomId], references: [id])
+
+  /// Board load: a room's shapes, oldest first
+  @@index([roomId, createdAt])
 }

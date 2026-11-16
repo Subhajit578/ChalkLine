@@ -1,9 +1,8 @@
 /**
  * Keeping a sick dependency from taking the whole process with it.
  *
- * Written in plain JavaScript on purpose: this package is exported as raw
- * source and the compiled backends `require()` it, so Node parses this file
- * itself and will not strip type annotations. Types live in resilience.d.ts.
+ * Plain CommonJS, loaded as-is: it needs no build step, and runs unchanged on
+ * every Node version. Types live in resilience.d.ts.
  *
  * Three pieces, which only work together:
  *

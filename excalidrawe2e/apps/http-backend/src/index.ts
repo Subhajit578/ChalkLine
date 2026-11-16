@@ -1,21 +1,38 @@
 import express from "express";
 import jwt from "jsonwebtoken";
 import {isLoggedIn} from "./middleware"
-import {JWT_SECRET} from '@repo/backend-common/config'
+import {JWT_SECRET, JWT_ALGORITHM, isAllowedOrigin} from '@repo/backend-common/config'
 import {CreateUserSchema,SigninUserSchema,CreateRoomSchema,ClaimAccountSchema,PresignUploadSchema,ConfirmUploadSchema,UpdateAvatarSchema,MAX_IMAGE_BYTES} from "@repo/common/types";
 import { guestUsername, MAX_NAME_ATTEMPTS } from "./guestNames";
 import { startGuestSweeper, GUEST_TTL_DAYS, deleteAccount } from "./guestCleanup";
-import { presignPut, headObject, publicUrl, getObjectPrefix, storageHealth } from "./storage";
-import { readDimensions, HEADER_BYTES } from "./imageSize";
+import { startFileSweeper } from "./fileCleanup";
+import { presignPut, headObject, publicUrl, getObjectBytes, putObject, deleteObject, tempKey, storageHealth } from "./storage";
+import { readDimensions, sniffImageType } from "./imageSize";
 import { STYLES, isAvatarId, randomAvatarId, avatarFor } from "./avatars";
 import { prismaClient, dbGuard } from "@repo/db-package/client"
 import cors from "cors"
 import compression from "compression"
-import { createHash } from "crypto"
+import { createHash, randomUUID } from "crypto"
 import rateLimit from "express-rate-limit"
+import helmet from "helmet"
 import zlib from "zlib"
 import bcrypt from "bcrypt"
 const app = express()
+
+/**
+ * Number of proxies in front of this server. Behind a load balancer every
+ * request would otherwise share the balancer's IP, and one rate-limit bucket.
+ * Always a number, never `true`: trusting every hop lets clients spoof their
+ * IP via X-Forwarded-For. Defaults to 1 in production; override with TRUST_PROXY.
+ */
+const proxyHops =
+  process.env.TRUST_PROXY !== undefined
+    ? Number(process.env.TRUST_PROXY)
+    : process.env.NODE_ENV === "production" ? 1 : 0;
+app.set("trust proxy", Number.isInteger(proxyHops) && proxyHops >= 0 ? proxyHops : 0);
+
+// Standard security headers (no sniffing, no framing, HSTS). This API only returns JSON, so defaults are fine.
+app.use(helmet())
 
 /**
  * Compress responses on the way out.
@@ -78,19 +95,14 @@ app.use(express.json())
  * some other way, and an open API is a standing invitation to build things
  * against it that then break when it is closed.
  *
- * An allowlist from the environment, defaulting to local development.
+ * Allowlist from ALLOWED_ORIGINS (shared with the socket server).
  */
-const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS ?? "http://localhost:3000")
-  .split(",")
-  .map((o) => o.trim())
-  .filter(Boolean);
-
 app.use(cors({
   origin(origin, callback) {
     // no Origin header at all: curl, a mobile app, a server-to-server call.
     // These are not browsers, so CORS is not what protects them - the token is.
     if (!origin) return callback(null, true);
-    return callback(null, ALLOWED_ORIGINS.includes(origin));
+    return callback(null, isAllowedOrigin(origin));
   },
   credentials: true,
 }))
@@ -128,6 +140,33 @@ app.use("/account/claim", authLimiter);
 app.use("/guest", guestLimiter);
 
 /**
+ * Per-account limits for costly routes. Keyed by user id (use behind
+ * isLoggedIn only): the IP limits can't stop one person making many free
+ * guest accounts.
+ */
+function perUserLimit(windowMs: number, limit: number, message: string) {
+  return rateLimit({
+    windowMs,
+    limit,
+    standardHeaders: "draft-7",
+    legacyHeaders: false,
+    keyGenerator: (req) => req.userId ?? "anonymous",
+    message: { message },
+  });
+}
+
+const createRoomLimiter = perUserLimit(60 * 60 * 1000, 30, "Too many new canvases - try again later");
+const joinLimiter = perUserLimit(10 * 60 * 1000, 60, "Too many attempts to open canvases - wait a few minutes");
+const presignLimiter = perUserLimit(10 * 60 * 1000, 60, "Too many uploads - wait a few minutes");
+const confirmLimiter = perUserLimit(10 * 60 * 1000, 60, "Too many uploads - wait a few minutes");
+
+/** Max canvases per account. */
+const MAX_ROOMS_PER_USER = 100;
+
+/** Max image bytes per account. */
+const MAX_STORAGE_BYTES_PER_USER = 250 * 1024 * 1024;
+
+/**
  * Liveness, and a window into the breakers.
  *
  * Deliberately touches nothing: no database, no object store. That is the
@@ -159,39 +198,51 @@ const TOKEN_TTL = `${GUEST_TTL_DAYS}d`;
 function issueToken(user: { id: string; username: string }) {
   return jwt.sign({ userId: user.id, username: user.username }, JWT_SECRET, {
     expiresIn: TOKEN_TTL,
+    algorithm: JWT_ALGORITHM,
   });
 }
 
-//done 
+/** Creates an account. Refusals are 4xx with a string message. */
 app.post("/signup", async (req,res) => {
-    const email = req.body.email
-    const password = req.body.password
-    const username = req.body.username
-    const data = CreateUserSchema.safeParse(req.body)
-    if(!data.success) {
-        return res.json({
-            message : "Incorrect Inputs"
+    const parsed = CreateUserSchema.safeParse(req.body)
+    if(!parsed.success) {
+        return res.status(400).send({
+            message : parsed.error.issues[0]?.message ?? "Check your details and try again"
         })
-    } else {
-        try {
-        const hashedPassword = await bcrypt.hash(password, 10)
+    }
+    const { email, username, password } = parsed.data
+    try {
         await prismaClient.user.create({
             data: {
-                username: username,
-                email :  email,
-                password : hashedPassword,
+                username,
+                email,
+                password : await bcrypt.hash(password, 10),
                 // a face from the fixed pool, picked at random. Everyone
                 // arrives looking like someone rather than like a placeholder,
                 // and the dashboard lets them change it.
                 photo : randomAvatarId()
             },
         })
-        res.status(200).send({message:"User created"})
-    } catch (err){
-        res.status(400).send({message: err})
-    }
+        return res.status(201).send({message:"User created"})
+    } catch (err: any){
+        if (err?.code === "P2002") {
+            const taken = String(err?.meta?.target ?? "").includes("email")
+                ? "That email is already registered"
+                : "That username is taken"
+            return res.status(409).send({ message: taken })
+        }
+        console.error("[auth] signup failed:", err)
+        return res.status(500).send({ message: "Could not create the account" })
     }
 }) 
+
+/**
+ * Dummy bcrypt hash, compared against when the account or password is
+ * missing, so "no such user" takes as long as "wrong password" and doesn't
+ * reveal which usernames exist.
+ */
+const DUMMY_HASH = bcrypt.hashSync(randomUUID(), 10)
+
 // done 
 app.post("/signin", async (req,res) => {
     const safeData = SigninUserSchema.safeParse(req.body)
@@ -204,8 +255,13 @@ app.post("/signin", async (req,res) => {
     // to username-first logins locks nobody out.
     const identifier = (safeData.data.identifier ?? safeData.data.email)!.trim()
 
+    // Look in one column, chosen by whether the input has "@" (usernames
+    // can't). Searching both let someone register another person's email as a
+    // username. Email match ignores case for accounts older than lowercasing.
     const user = await prismaClient.user.findFirst({
-        where: { OR: [{ username: identifier }, { email: identifier }] },
+        where: identifier.includes("@")
+            ? { email: { equals: identifier, mode: "insensitive" } }
+            : { username: identifier },
         select: { username: true, id: true, password: true, isGuest: true },
     })
 
@@ -213,9 +269,11 @@ app.post("/signin", async (req,res) => {
     // turns this endpoint into a way to discover which usernames exist.
     const DENIED = { message: "Invalid credentials" }
     if (!user) {
+        await bcrypt.compare(password, DUMMY_HASH)
         return res.status(401).send(DENIED)
     }
     if (!user.password) {
+        await bcrypt.compare(password, DUMMY_HASH)
         // a guest, held by its token alone - there is no password to check,
         // and bcrypt.compare against an empty hash would throw
         return res.status(401).send({
@@ -498,42 +556,68 @@ app.post("/account/claim", isLoggedIn, async (req, res) => {
         return res.status(500).send({ message: "Could not save those details" })
     }
 })
-app.post("/room", isLoggedIn ,async (req,res) => {
-    const parsedData = CreateRoomSchema.safeParse(req.body);
-    if(!parsedData.success){
-        return res.json({
-            message:"Incorrect Inputs"
+/** Creates a canvas. Refusals are 4xx with a string message. */
+app.post("/room", isLoggedIn, createRoomLimiter, async (req,res) => {
+    const parsed = CreateRoomSchema.safeParse(req.body);
+    if(!parsed.success){
+        return res.status(400).send({
+            message: parsed.error.issues[0]?.message ?? "That name is not valid"
         })
     }
-    const slug = req.body.slug
-    //@ts-ignore
-    const userId = req.userId;
+    const userId = req.userId!;
     try{
-    const room = await prismaClient.room.create({
-        data: {
-            slug:slug,
-            adminId:userId
+        const owned = await prismaClient.room.count({ where: { adminId: userId } })
+        if (owned >= MAX_ROOMS_PER_USER) {
+            return res.status(403).send({
+                message: `You have reached the limit of ${MAX_ROOMS_PER_USER} canvases. Delete one to make another.`
+            })
         }
-    })
-    res.send({
-        roomId : room.id, slug :room.slug
-    })
-} catch (err){
-    return res.json({message:"room already exist"})
-}
-    
-})
-//fetch room details using slugs
-app.get("/room/:slug", isLoggedIn, async(req , res) => {
-    const room = await prismaClient.room.findUnique({
-        where : { slug : req.params.slug}, 
-        select : {id:true, slug: true, createdAt: true, admin:{select : {id: true , username :true}}}
-})
-    if(!room ) {
-        return res.status(404).send({err : "Error finding room"})
-    } else {
-        return res.send({room})
+        const room = await prismaClient.room.create({
+            data: { slug: parsed.data.slug, adminId: userId }
+        })
+        return res.status(201).send({ roomId : room.id, slug : room.slug, shareId : room.shareId })
+    } catch (err: any){
+        if (err?.code === "P2002") {
+            return res.status(409).send({ message: "A canvas with that name already exists" })
+        }
+        if (err?.code === "P2003") {
+            // owner row is gone
+            return res.status(401).send({ message: "This account no longer exists" })
+        }
+        throw err   // the handler at the bottom turns it into a 503 or a 500
     }
+})
+
+const ROOM_FIELDS = { id: true, slug: true, shareId: true, adminId: true, createdAt: true } as const
+
+/**
+ * Finds the room a link points at for this user, or null.
+ *
+ * The share id (random, unguessable) is what lets a newcomer in; `viaLink`
+ * says that's how it was found. The room's *name* still resolves, but only
+ * for its owner and members, so old bookmarks keep working while guessing a
+ * name no longer admits anyone.
+ */
+async function resolveRoom(key: string, userId: string) {
+    const byLink = await prismaClient.room.findUnique({ where: { shareId: key }, select: ROOM_FIELDS })
+    if (byLink) return { room: byLink, viaLink: true }
+
+    const byName = await prismaClient.room.findUnique({
+        where: { slug: key },
+        select: { ...ROOM_FIELDS, members: { where: { userId }, select: { id: true } } },
+    })
+    if (!byName || (byName.adminId !== userId && byName.members.length === 0)) return null
+    const { members, ...room } = byName
+    return { room, viaLink: false }
+}
+
+/** Room details, by share link id (or by name, for people already in it). */
+app.get("/room/:key", isLoggedIn, async(req , res) => {
+    const found = await resolveRoom(req.params.key ?? "", req.userId!)
+    if(!found) {
+        return res.status(404).send({ message : "Room not found" })
+    }
+    return res.send({ room: found.room })
 })
 /**
  * Every shape on a board.
@@ -581,35 +665,36 @@ app.get("/shapes/:roomId" , isLoggedIn, async (req, res) => {
     }
 })
 /**
- * Join a room by its slug - what happens when someone opens a shared link.
- *
- * Idempotent: joining twice is the same as joining once, and the admin is
- * never recorded as a member, since ownership already lists the room for them.
+ * Joins a room (opening a shared link). Idempotent; the owner is never added
+ * as a member. Only the share id creates a membership; a name creates
+ * nothing. The canvas page calls this before opening its socket, since the
+ * socket server checks the membership written here.
  */
-app.post("/room/:slug/join", isLoggedIn, async (req, res) => {
-    //@ts-ignore
-    const userId = req.userId;
-    try {
-        const room = await prismaClient.room.findUnique({
-            where: { slug: req.params.slug },
-            select: { id: true, slug: true, adminId: true },
-        });
-        if (!room) {
-            return res.status(404).send({ message: "Room not found" });
-        }
-        if (room.adminId === userId) {
-            return res.send({ room, joined: false, reason: "you own this room" });
-        }
-        await prismaClient.roomMember.upsert({
-            where: { roomId_userId: { roomId: room.id, userId } },
-            create: { roomId: room.id, userId },
-            update: {},
-        });
-        return res.send({ room, joined: true });
-    } catch (err) {
-        console.error("[http] join failed:", err);
-        return res.status(500).send({ message: "Could not join that room" });
+app.post("/room/:key/join", isLoggedIn, joinLimiter, async (req, res) => {
+    const userId = req.userId!;
+    const found = await resolveRoom(req.params.key ?? "", userId)
+    if (!found) {
+        return res.status(404).send({ message: "Room not found" });
     }
+    const { room, viaLink } = found
+    if (room.adminId === userId) {
+        return res.send({ room, joined: false, reason: "you own this room" });
+    }
+    if (viaLink) {
+        try {
+            await prismaClient.roomMember.upsert({
+                where: { roomId_userId: { roomId: room.id, userId } },
+                create: { roomId: room.id, userId },
+                update: {},
+            });
+        } catch (err: any) {
+            if (err?.code === "P2003") {
+                return res.status(401).send({ message: "This account no longer exists" })
+            }
+            throw err
+        }
+    }
+    return res.send({ room, joined: true });
 });
 
 /**
@@ -618,124 +703,108 @@ app.post("/room/:slug/join", isLoggedIn, async (req, res) => {
  * dashboard can group them and only offer rename or delete on its own.
  */
 app.get("/rooms", isLoggedIn, async(req, res) => {
-    //@ts-ignore
-const userId = req.userId
-try {
-const owned = await prismaClient.room.findMany({
-    where : {adminId : userId},
-    orderBy: {createdAt: "desc"},
-    select : {id:true, slug: true, createdAt:true}
+    const userId = req.userId!
+    // independent queries, run together
+    const [owned, memberships] = await Promise.all([
+        prismaClient.room.findMany({
+            where : {adminId : userId},
+            orderBy: {createdAt: "desc"},
+            select : {id:true, slug: true, shareId: true, createdAt:true}
+        }),
+        prismaClient.roomMember.findMany({
+            where: { userId },
+            orderBy: { joinedAt: "desc" },
+            select: {
+                joinedAt: true,
+                room: { select: { id: true, slug: true, shareId: true, createdAt: true, admin: { select: { id: true, username: true, photo: true } } } },
+            },
+        }),
+    ])
+    const joined = memberships.map(({ joinedAt, room: { admin, ...room } }) => ({
+        ...room,
+        joinedAt,
+        owner: admin.username,
+        // resolve here: owners predating avatars have a blank column
+        ownerAvatar: avatarFor(admin.photo, admin.id),
+        owned: false,
+    }))
+    res.send({
+        rooms: owned.map((r) => ({ ...r, owned: true })),
+        joined,
+    })
 })
-const memberships = await prismaClient.roomMember.findMany({
-    where: { userId },
-    orderBy: { joinedAt: "desc" },
-    select: {
-        joinedAt: true,
-        room: { select: { id: true, slug: true, createdAt: true, admin: { select: { id: true, username: true, photo: true } } } },
-    },
-})
-const joined = memberships.map((m) => ({
-    ...m.room,
-    joinedAt: m.joinedAt,
-    owner: m.room.admin.username,
-    // resolved here rather than sent raw: the owner may predate avatars, and
-    // a blank column on someone else's card is a broken image on your page
-    ownerAvatar: avatarFor(m.room.admin.photo, m.room.admin.id),
-}))
-res.send({
-    rooms: owned.map((r) => ({ ...r, owned: true })),
-    joined: joined.map(({ admin, ...r }: any) => ({ ...r, owned: false })),
-})
-}
-catch(err) {
-    res.status(404).send({err : "Error finding user docs"})
-}
-})
+
+/**
+ * Deletes a canvas with its shapes and memberships in one transaction
+ * (children first). Deleting the room alone fails on the RoomMember foreign
+ * key once anyone has joined.
+ */
 app.delete("/room/:id" , isLoggedIn, async(req, res) => {
     const id = Number(req.params.id)
-    //@ts-ignore
-    const userId = req.userId; 
-    try {
-    const room = await prismaClient.room.findUnique({where : {id}})
-    if(!room) return res.status(404).send({message : "Not found "})
-    else if(room.adminId !== userId) {
-        return res.status(403).send({message : "not ur room"})
-    } else {
-        try {
-            await prismaClient.shape.deleteMany({ where: { roomId: id } });
-            await prismaClient.room.delete({ where: { id } });
-        } catch (err) {
-            return res.send({message : "Error deleting Message "})
-        }
+    if (!Number.isInteger(id)) {
+        return res.status(400).send({ message: "Invalid id" })
     }
-    } catch (err) {
-console.log(err, err)
-res.status(500).send({error : err})
-}
+    const room = await prismaClient.room.findUnique({ where : {id}, select: { adminId: true } })
+    if(!room) return res.status(404).send({message : "Not found"})
+    if(room.adminId !== req.userId) {
+        return res.status(403).send({message : "Not your room"})
+    }
+    await prismaClient.$transaction([
+        prismaClient.shape.deleteMany({ where: { roomId: id } }),
+        prismaClient.roomMember.deleteMany({ where: { roomId: id } }),
+        prismaClient.room.delete({ where: { id } }),
+    ])
+    return res.status(204).end()
 })
+
+/** Rename a canvas. The share link is the shareId, so it does not change. */
 app.patch("/room/:id", isLoggedIn, async (req, res) => {
-    const id = Number(req.params.id);            // ← convert
-    if (Number.isNaN(id)) {                       // ← now this check actually works
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) {
       return res.status(400).send({ message: "Invalid id" });
     }
-  
-    // @ts-ignore
-    const userId = req.userId;
-    const slug = req.body.slug;
-  
-    if (!slug || typeof slug !== "string") {
-      return res.status(400).send({ message: "Invalid Slug" });
+
+    // same rules as creating
+    const parsed = CreateRoomSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).send({
+        message: parsed.error.issues[0]?.message ?? "That name is not valid",
+      });
     }
-  
-    const room = await prismaClient.room.findUnique({ where: { id } });
+
+    const room = await prismaClient.room.findUnique({ where: { id }, select: { adminId: true } });
     if (!room) return res.status(404).send({ message: "Not found" });
-    if (room.adminId !== userId) {
+    if (room.adminId !== req.userId) {
       return res.status(403).send({ message: "Not your room" });
     }
-  
+
     try {
       const updated = await prismaClient.room.update({
         where: { id },
-        data: { slug },
-        select: { id: true, slug: true },
+        data: { slug: parsed.data.slug },
+        select: { id: true, slug: true, shareId: true },
       });
-      res.send(updated);
+      return res.send(updated);
     } catch (err: any) {
-      if (err.code === "P2002") {
-        return res.status(409).send({ message: "Slug already taken" });
+      if (err?.code === "P2002") {
+        return res.status(409).send({ message: "A canvas with that name already exists" });
       }
-      console.error(err);
-      res.status(500).send({ message: "Failed to rename" });
+      throw err;
     }
   });
 
-/* ════════════════════════════════════════════════════════════════════════
- * Image uploads
- *
- * Two small JSON calls around an upload this process never sees. The browser
- * sends the bytes straight to object storage with a presigned URL, so the API
- * never buffers a file, never pays for the bandwidth twice, and does not get
- * slower as images get bigger. Scaling the board and scaling image traffic
- * become separate problems.
- *
- * Images are addressed by the SHA-256 of their bytes, so the same picture is
- * stored once however many boards it lands on, and its URL can be cached
- * forever because a hash cannot come to mean different bytes.
- * ════════════════════════════════════════════════════════════════════════ */
+/* ── Image uploads ──────────────────────────────────────────────────────
+ * The browser PUTs bytes straight to object storage (into a holding key);
+ * /files/confirm then checks them and writes the final object. Images are
+ * keyed by SHA-256, so each picture is stored once and cached forever, which
+ * only holds if the server computes the hash itself. */
 
 /**
- * Ask for permission to upload one image.
- *
- * Answers one of two things: "already have it" - costing a re-paste a single
- * round trip instead of a megabyte - or a URL good for one PUT of these exact
- * bytes, for a few minutes.
- *
- * This is the only endpoint that hands out write access to the bucket, so the
- * body is validated strictly before anything is signed: the hash shape,
- * because it becomes the object key; the type, against an allowlist; and the
- * size, because the client's own limit is a courtesy rather than a control.
+ * Asks to upload one image. Answers "already stored" (no upload needed) or a
+ * short-lived URL for one PUT of the declared type and size. The URL points
+ * at a per-account holding key, never the final key boards read from.
  */
-app.post("/files/presign", isLoggedIn, async (req, res) => {
+app.post("/files/presign", isLoggedIn, presignLimiter, async (req, res) => {
   const parsed = PresignUploadSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(422).send({
@@ -744,12 +813,12 @@ app.post("/files/presign", isLoggedIn, async (req, res) => {
     });
   }
   const { hash, mimeType, size } = parsed.data;
+  const userId = req.userId!;
 
-  try {
-    const existing = await prismaClient.file.findUnique({ where: { hash } });
-    if (existing) {
-      // someone has already uploaded these exact bytes, here or on another
-      // board: nothing to send, and nothing to write
+  const existing = await prismaClient.file.findUnique({ where: { hash } });
+  if (existing) {
+    if (await headObject(hash)) {
+      // these exact bytes are already stored
       return res.send({
         exists: true,
         url: publicUrl(hash),
@@ -757,94 +826,91 @@ app.post("/files/presign", isLoggedIn, async (req, res) => {
         height: existing.height,
       });
     }
-
-    const uploadUrl = await presignPut(hash, mimeType);
-    return res.send({ exists: false, uploadUrl, maxBytes: MAX_IMAGE_BYTES, size });
-  } catch (err) {
-    console.error("[files] presign failed:", err);
-    return res.status(500).send({ message: "Could not start the upload" });
+    // Row exists but the object is gone (e.g. local storage was reset).
+    // Drop the stale row so the picture can be uploaded again.
+    await prismaClient.file.delete({ where: { hash } }).catch(() => {});
   }
+
+  const used = await prismaClient.file.aggregate({ where: { userId }, _sum: { size: true } });
+  if ((used._sum.size ?? 0) + size > MAX_STORAGE_BYTES_PER_USER) {
+    return res.status(413).send({
+      message: "You have used all the image storage this account gets. Remove some images to add more.",
+    });
+  }
+
+  const uploadUrl = await presignPut(tempKey(userId, hash), mimeType, size);
+  return res.send({ exists: false, uploadUrl, maxBytes: MAX_IMAGE_BYTES, size });
 });
 
 /**
- * Report that the upload finished, and get the row written.
- *
- * The claim is checked rather than believed: the object store is asked whether
- * the key exists and how big it is, and those answers - not the client's - are
- * what get stored. Without that, anyone could register rows for objects that
- * were never uploaded.
- *
- * Writing is idempotent. A retry after a dropped response finds the row
- * already there and succeeds, because the hash is the primary key and the
- * bytes behind it cannot have changed.
+ * Confirms an upload by verifying the pending object, trusting nothing from
+ * the client:
+ *   size  within the cap
+ *   hash  SHA-256 of the bytes equals the key (otherwise someone else's image
+ *         could show up on boards that paste "the same" picture)
+ *   type  starts like a PNG, JPEG, WebP or GIF
+ * Then the server writes the final object from the bytes it just checked.
+ * Failed checks delete the pending object. Retrying is safe: an existing row
+ * means success.
  */
-app.post("/files/confirm", isLoggedIn, async (req, res) => {
+app.post("/files/confirm", isLoggedIn, confirmLimiter, async (req, res) => {
   const parsed = ConfirmUploadSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(422).send({ message: "Invalid confirmation" });
   }
   const { hash, width, height } = parsed.data;
-  //@ts-ignore - set by isLoggedIn
-  const userId: string = req.userId;
+  const userId = req.userId!;
+
+  const existing = await prismaClient.file.findUnique({ where: { hash } });
+  if (existing) {
+    return res.send({ url: publicUrl(hash), width: existing.width, height: existing.height });
+  }
+
+  const pendingKey = tempKey(userId, hash);
+  // best effort: the sweep removes leftovers, so a failed delete isn't a 500
+  const discard = () => deleteObject(pendingKey).catch(() => {});
+
+  if (!(await headObject(pendingKey))) {
+    return res.status(409).send({ message: "That upload did not arrive" });
+  }
+  // reads at most limit + 1 bytes, which is enough to detect "too large"
+  const bytes = await getObjectBytes(pendingKey, MAX_IMAGE_BYTES);
+  if (!bytes) {
+    return res.status(409).send({ message: "That upload did not arrive" });
+  }
+  if (bytes.length > MAX_IMAGE_BYTES) {
+    await discard();
+    return res.status(413).send({ message: "That image is too large" });
+  }
+  if (createHash("sha256").update(bytes).digest("hex") !== hash) {
+    await discard();
+    return res.status(422).send({ message: "That upload does not match the image it claimed to be" });
+  }
+  const mimeType = sniffImageType(bytes);
+  if (!mimeType) {
+    await discard();
+    return res.status(422).send({ message: "That file is not a PNG, JPEG, WebP or GIF" });
+  }
+
+  // Dimensions from the header; fall back to the client's (worst case: bad layout).
+  const measured = readDimensions(bytes);
+  const actualWidth = measured?.width ?? width;
+  const actualHeight = measured?.height ?? height;
+
+  await putObject(hash, bytes, mimeType);
 
   try {
-    const existing = await prismaClient.file.findUnique({ where: { hash } });
-    if (existing) {
-      return res.send({ url: publicUrl(hash), width: existing.width, height: existing.height });
-    }
-
-    const stored = await headObject(hash);
-    if (!stored) {
-      return res.status(409).send({ message: "That upload did not arrive" });
-    }
-    if (stored.size > MAX_IMAGE_BYTES) {
-      return res.status(413).send({ message: "That image is too large" });
-    }
-
-    // Read the dimensions out of the stored header rather than believing the
-    // ones in the body. HeadObject cannot report them - it decodes nothing -
-    // so this is a ranged GET of the first few kilobytes.
-    //
-    // It matters more than it looks: a File row is written once and then
-    // returned to every later upload of the same bytes, so a wrong value is
-    // permanent and has no path to correction. The cost of a bad one is only
-    // layout - the shape gets the wrong aspect and the bitmap is stretched into
-    // it - but it is the last field in the pipeline that was taken on trust.
-    //
-    // A parse failure falls back to the client's numbers: an unrecognised
-    // header is a reason to distrust the dimensions, not to reject an upload
-    // whose bytes are already stored and verified by their hash.
-    const prefix = await getObjectPrefix(hash, HEADER_BYTES);
-    const measured = prefix ? readDimensions(prefix) : null;
-    if (!measured) {
-      console.warn(
-        `[files] could not read dimensions for ${hash} (${stored.mimeType}); using the client's`
-      );
-    }
-    const actualWidth = measured?.width ?? width;
-    const actualHeight = measured?.height ?? height;
-
     await prismaClient.file.create({
-      data: {
-        hash,
-        mimeType: stored.mimeType,
-        size: stored.size,
-        width: actualWidth,
-        height: actualHeight,
-        userId,
-      },
+      data: { hash, mimeType, size: bytes.length, width: actualWidth, height: actualHeight, userId },
     });
-
-    return res.send({ url: publicUrl(hash), width: actualWidth, height: actualHeight });
   } catch (err: any) {
     // two tabs confirming the same paste at once: the loser of the race finds
     // the row already written, which is the outcome it wanted anyway
-    if (err?.code === "P2002") {
-      return res.send({ url: publicUrl(hash), width, height });
-    }
-    console.error("[files] confirm failed:", err);
-    return res.status(500).send({ message: "Could not save that image" });
+    if (err?.code !== "P2002") throw err;
   }
+  await discard();
+
+  return res.send({ url: publicUrl(hash), width: actualWidth, height: actualHeight });
 });
 
 // configurable so a second instance can be run alongside the dev one, for
@@ -871,6 +937,10 @@ app.use((err: any, _req: express.Request, res: express.Response, next: express.N
       reason: err.code,
     });
   }
+  // malformed JSON or oversized body: the caller's mistake, not a 500
+  if (Number.isInteger(err?.status) && err.status >= 400 && err.status < 500) {
+    return res.status(err.status).send({ message: "That request could not be read" });
+  }
   console.error("[api] unhandled:", err);
   return res.status(500).send({ message: "Something went wrong" });
 });
@@ -878,10 +948,23 @@ app.use((err: any, _req: express.Request, res: express.Response, next: express.N
 // expired guests are unreachable accounts: swept so the table does not grow
 // without bound, and so their usernames come back into circulation
 startGuestSweeper();
+// abandoned uploads and unused images
+startFileSweeper();
 
-app.listen(Number(process.env.PORT) || 3001)
+const server = app.listen(Number(process.env.PORT) || 3001)
 
-
-
-
-
+/**
+ * On SIGTERM (every deploy): stop accepting connections, let in-flight
+ * requests finish, close the DB pool. The timer covers keep-alive
+ * connections that would hold close() open.
+ */
+function shutdown(signal: string) {
+  console.log(`[api] ${signal} received, finishing in-flight requests`);
+  server.close(() => {
+    prismaClient.$disconnect().catch(() => {}).finally(() => process.exit(0));
+  });
+  server.closeIdleConnections();
+  setTimeout(() => process.exit(0), 10_000).unref();
+}
+process.once("SIGTERM", () => shutdown("SIGTERM"));
+process.once("SIGINT", () => shutdown("SIGINT"));

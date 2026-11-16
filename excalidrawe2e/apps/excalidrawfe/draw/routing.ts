@@ -1,5 +1,4 @@
 import type { Point } from "./renderer";
-import { Shape } from "./Game";
 /**
  * A drag shorter than this on either axis counts as straight: an elbow there
  * would leave a stub of a few pixels, which reads as a rendering glitch rather
@@ -38,4 +37,48 @@ export function elbowPoints(from: Point, to: Point): Point[] {
       : { x: from.x, y: to.y }; // down, then across
 
   return [start, corner, end];
+}
+
+/** How far `p` is from the segment a-b. */
+function distanceToSegment(p: Point, a: Point, b: Point): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const lengthSquared = dx * dx + dy * dy;
+  if (lengthSquared === 0) return Math.hypot(p.x - a.x, p.y - a.y);
+  const u = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / lengthSquared));
+  return Math.hypot(p.x - (a.x + u * dx), p.y - (a.y + u * dy));
+}
+
+/**
+ * Removes redundant points from a pencil stroke (Ramer-Douglas-Peucker).
+ * A point is dropped if the line through its neighbours passes within
+ * `tolerance` of it, so the result never strays further than that. Ends are
+ * always kept. Iterative, since a long scribble could overflow the stack.
+ */
+export function simplifyStroke(points: Point[], tolerance: number): Point[] {
+  if (points.length <= 2 || !(tolerance > 0)) return points;
+
+  const keep = new Uint8Array(points.length);
+  keep[0] = 1;
+  keep[points.length - 1] = 1;
+
+  const spans: [number, number][] = [[0, points.length - 1]];
+  while (spans.length > 0) {
+    const [first, last] = spans.pop()!;
+    let worst = 0;
+    let index = -1;
+    for (let i = first + 1; i < last; i++) {
+      const distance = distanceToSegment(points[i]!, points[first]!, points[last]!);
+      if (distance > worst) {
+        worst = distance;
+        index = i;
+      }
+    }
+    if (index !== -1 && worst > tolerance) {
+      keep[index] = 1;
+      spans.push([first, index], [index, last]);
+    }
+  }
+
+  return points.filter((_, i) => keep[i] === 1);
 }

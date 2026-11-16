@@ -4,6 +4,8 @@ import { Eye, EyeOff, Mail, Lock, Sparkles, UserRound } from 'lucide-react';
 import axios from 'axios'
 import {useRouter} from "next/navigation"
 import { setToken } from "@/lib/session"
+import { API_URL } from "@/lib/config"
+import { errorMessage } from "@/lib/errors"
 export function AuthPage({ isSignin }: { isSignin: boolean }) {
     // one field on sign-in: a username or an email, because guests only ever
     // have the first and everyone who signed up before only had the second
@@ -17,7 +19,7 @@ export function AuthPage({ isSignin }: { isSignin: boolean }) {
     const [successMsg, setSuccessMsg] = useState<string | null>(null);
     const router = useRouter()
     async function signIn() {
-        const res = await axios.post("http://localhost:3001/signin",{
+        const res = await axios.post(`${API_URL}/signin`,{
             identifier, password
         })
         setToken(res.data.token);
@@ -36,16 +38,16 @@ export function AuthPage({ isSignin }: { isSignin: boolean }) {
         setIsLoading(true);
         setErrorMsg(null);
         try {
-            const res = await axios.post("http://localhost:3001/guest");
+            const res = await axios.post(`${API_URL}/guest`);
             setToken(res.data.token);
             router.push("/dashboard");
-        } catch (err: any) {
-            setErrorMsg(err?.response?.data?.message ?? "Could not start a guest session");
+        } catch (err) {
+            setErrorMsg(errorMessage(err, "Could not start a guest session"));
             setIsLoading(false);
         }
     }
     async function signUp() {
-        await axios.post("http://localhost:3001/signup",{
+        await axios.post(`${API_URL}/signup`,{
             email,username,password
         })
         router.push("/signin")
@@ -64,8 +66,8 @@ export function AuthPage({ isSignin }: { isSignin: boolean }) {
             setSuccessMsg("Account created successfully.");
           }
           // TODO: navigate to dashboard, etc.
-        } catch (err: any) {
-          setErrorMsg(err?.response?.data?.message ?? err?.message ?? "Something went wrong");
+        } catch (err) {
+          setErrorMsg(errorMessage(err, "Something went wrong - check your connection and try again"));
         } finally {
           setIsLoading(false);
         }

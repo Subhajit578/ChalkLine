@@ -120,13 +120,11 @@ async function main() {
 }
 
 /**
- * Write the manifest as plain JavaScript in a .ts file.
+ * Write the manifest as data only: no types, no logic.
  *
- * Not a stylistic choice: `@repo/common` is exported as raw source, and the
- * compiled backend `require()`s it, so Node parses this file itself. Node 22
- * does not strip types, which means a single type annotation here is a
- * SyntaxError at server start. Data only, no annotations - the same constraint
- * types.ts already documents.
+ * `@repo/common` is compiled to dist/ like any other TypeScript now, so this
+ * is no longer a parsing constraint - it is just the right shape for a
+ * generated file. Logic belongs in apps/http-backend/src/avatars.ts.
  */
 function renderManifest(styles) {
   const body = styles
@@ -147,9 +145,8 @@ ${s.ids.map((id) => `      "${id}",`).join("\n")}
 // the order the picker shows them in. An id is "<style>/<nn>", which is also
 // the path of its SVG under the frontend's /avatars.
 //
-// Plain JavaScript, deliberately. This file is loaded as source at runtime by
-// the backend, and Node 22 does not strip types - one annotation here and the
-// server will not start.
+// Data only, deliberately: no types and no logic. Anything that decides
+// something belongs in apps/http-backend/src/avatars.ts.
 
 export const AVATAR_STYLES = [
 ${body}

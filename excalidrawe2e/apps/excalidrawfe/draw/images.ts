@@ -1,4 +1,6 @@
 import axios, { AxiosError } from "axios";
+import { API_URL as API } from "@/lib/config";
+import { getToken } from "@/lib/session";
 
 /**
  * Turning a dropped, pasted or picked file into something the board can hold.
@@ -8,8 +10,6 @@ import axios, { AxiosError } from "axios";
  * the same path for all three input routes, because a screenshot from the
  * clipboard and a photo from a phone differ only in how they arrive.
  */
-
-const API = "http://localhost:3001";
 
 /**
  * Longest edge an uploaded image is reduced to, in pixels.
@@ -87,7 +87,7 @@ export type UploadedImage = {
 };
 
 function authHeaders() {
-  return { Authorization: `Bearer ${localStorage.getItem("token")}` };
+  return { Authorization: `Bearer ${getToken()}` };
 }
 
 /**
@@ -117,20 +117,19 @@ async function decode(file: File): Promise<ImageBitmap> {
 }
 
 /**
- * Shrink to MAX_EDGE and re-encode as WebP.
- *
- * Returns the original bytes untouched when it is already small enough and
- * already a format worth keeping - re-encoding a 20KB PNG would only make it
- * bigger and lose a little quality for nothing.
+ * Shrinks to MAX_EDGE if needed and always re-encodes, never uploading the
+ * original bytes: photos carry EXIF (often GPS) and the bucket is public.
+ * Small PNG/GIF stay lossless PNG (screenshots, text); the rest become WebP.
  */
 async function downscale(
   file: File,
   bitmap: ImageBitmap
 ): Promise<{ blob: Blob; width: number; height: number }> {
   const longest = Math.max(bitmap.width, bitmap.height);
-  if (longest <= MAX_EDGE && file.size <= 512 * 1024) {
-    return { blob: file, width: bitmap.width, height: bitmap.height };
-  }
+  const lossless =
+    (file.type === "image/png" || file.type === "image/gif") &&
+    longest <= MAX_EDGE &&
+    file.size <= 512 * 1024;
 
   const ratio = Math.min(1, MAX_EDGE / longest);
   const width = Math.max(1, Math.round(bitmap.width * ratio));
@@ -142,7 +141,9 @@ async function downscale(
     throw new UploadError("decode", "This browser could not prepare that image for upload.");
   ctx.drawImage(bitmap, 0, 0, width, height);
 
-  const blob = await canvas.convertToBlob({ type: "image/webp", quality: QUALITY });
+  const blob = await canvas.convertToBlob(
+    lossless ? { type: "image/png" } : { type: "image/webp", quality: QUALITY }
+  );
   return { blob, width, height };
 }
 
@@ -265,7 +266,8 @@ export async function uploadImage(file: File): Promise<UploadedImage> {
   }
 
   const hash = await sha256(bytes);
-  const mimeType = blob.type || file.type;
+  // actual encoder output: browsers without WebP write PNG, and the URL is signed for the type
+  const mimeType = blob.type || "image/png";
 
   const presign = await axios
     .post(

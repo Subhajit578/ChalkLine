@@ -93,6 +93,22 @@ export function isDegenerate(shape: Shape, minimum = MIN_SIZE): boolean {
  * test rather than inside Game: it is the same geometry, asked a different way.
  */
 export function boundsOf(shape: Shape): Bounds {
+    let bounds = boundsCache.get(shape);
+    if (!bounds) {
+        bounds = measureBounds(shape);
+        boundsCache.set(shape, bounds);
+    }
+    return bounds;
+}
+
+/**
+ * Cache of bounds by shape object. Shapes are never edited in place (moves,
+ * resizes and updates create new objects), so identity is a safe key. Don't
+ * mutate a shape or a returned box.
+ */
+const boundsCache = new WeakMap<Shape, Bounds>();
+
+function measureBounds(shape: Shape): Bounds {
     switch (shape.type) {
         case "rect": {
             // width and height are signed: a rect dragged right-to-left stores
@@ -513,6 +529,14 @@ export function hitTest(shapes: Shape[], point: Point, tolerance: number) : Shap
     let hit = false;
     for (let i = shapes.length - 1; i >= 0; i--) {
     const shape = shapes[i];
+    // Cheap reject: a point farther than `tolerance` from the box can't hit the shape.
+    const box = boundsOf(shape);
+    if (
+        point.x < box.left - tolerance || point.x > box.right + tolerance ||
+        point.y < box.top - tolerance || point.y > box.bottom + tolerance
+    ) {
+        continue;
+    }
     if (shape.type === "circle") {
         hit = circleCollision(point, shape.centerX, shape.centerY, shape.radius, tolerance);  
         if(hit ===true) {

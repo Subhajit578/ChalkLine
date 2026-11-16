@@ -3,7 +3,6 @@ import React from "react";
 import { avatarUrl } from "@/lib/avatars";
 
 /**
- * Someone's face, in a circle.
  *
  * The circle and its background live here rather than in the SVG files. The
  * generated avatars are transparent on purpose: one copy of each face then
@@ -34,8 +33,9 @@ export function Avatar({
   const url = avatarUrl(id);
 
   return (
+    // styled by the dashboard stylesheet (.pu-avatar), the only place it renders
     <span
-      className={`inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-gradient-to-br from-indigo-100 to-purple-100 ring-1 ring-black/5 ${className}`}
+      className={`pu-avatar ${className}`}
       style={{ width: size, height: size }}
     >
       {url ? (
@@ -47,11 +47,10 @@ export function Avatar({
           width={size}
           height={size}
           loading={lazy ? "lazy" : "eager"}
-          className="h-full w-full"
         />
       ) : (
         <span
-          className="font-semibold text-indigo-600"
+          className="pu-avatar-initial"
           style={{ fontSize: size * 0.4 }}
         >
           {(username ?? "?").charAt(0).toUpperCase()}

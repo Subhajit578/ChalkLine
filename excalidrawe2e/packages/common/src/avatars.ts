@@ -4,9 +4,8 @@
 // the order the picker shows them in. An id is "<style>/<nn>", which is also
 // the path of its SVG under the frontend's /avatars.
 //
-// Plain JavaScript, deliberately. This file is loaded as source at runtime by
-// the backend, and Node 22 does not strip types - one annotation here and the
-// server will not start.
+// Data only, deliberately: no types and no logic. Anything that decides
+// something belongs in apps/http-backend/src/avatars.ts.
 
 export const AVATAR_STYLES = [
   {

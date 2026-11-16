@@ -7,7 +7,10 @@
     "dev": "turbo run dev",
     "lint": "turbo run lint",
     "format": "prettier --write \"**/*.{ts,tsx,md}\"",
-    "check-types": "turbo run check-types"
+    "check-types": "turbo run check-types",
+    "test": "turbo run test",
+    "db:deploy": "pnpm --filter @repo/db-package run migrate:deploy",
+    "smoke": "node scripts/smoke.mjs"
   },
   "devDependencies": {
     "@dicebear/collection": "9.4.2",
@@ -19,12 +22,19 @@
   },
   "packageManager": "pnpm@9.0.0",
   "engines": {
-    "node": ">=18"
+    "node": ">=22.12"
   },
   "pnpm": {
     "overrides": {
       "proxy-addr": ">=2.0.8",
-      "tar": ">=7.5.19"
+      "tar": ">=7.5.19",
+      "path-to-regexp@>=8.0.0 <8.4.0": "^8.4.0",
+      "defu@<6.1.5": "^6.1.5",
+      "postcss@<8.5.23": "^8.5.23",
+      "nanoid@>=3.0.0 <3.3.18": "^3.3.18",
+      "source-map-js@<1.2.2": "^1.2.2",
+      "sharp@<0.35.5": "^0.35.5",
+      "deepmerge-ts@<8.0.0": "^8.0.0"
     }
   }
 }

@@ -1,10 +1,9 @@
 "use client";
 import React, { useState } from "react";
 import axios from "axios";
-import { AlertTriangle } from "lucide-react";
 import { getToken } from "@/lib/session";
-
-const API = "http://localhost:3001";
+import { API_URL as API } from "@/lib/config";
+import { errorMessage } from "@/lib/errors";
 
 /**
  * Confirming account deletion.
@@ -46,74 +45,71 @@ export function DeleteAccountDialog({
         data: isGuest ? {} : { password },
       });
       onDeleted();
-    } catch (err: any) {
-      setError(err?.response?.data?.message ?? "Could not delete the account");
+    } catch (err) {
+      setError(errorMessage(err, "Could not delete the account"));
       setBusy(false);
     }
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
-        <div className="flex items-start gap-3">
-          <div className="rounded-lg bg-red-100 p-2">
-            <AlertTriangle className="h-5 w-5 text-red-600" />
-          </div>
-          <div className="flex-1">
-            <h2 className="text-lg font-semibold text-gray-900">Delete this account?</h2>
+    <div className="pu-scrim">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="delete-account-title"
+        className="pu-dialog"
+      >
+        <h2 id="delete-account-title" className="pu-dialog-title">
+          Delete this account?
+        </h2>
 
-            <div className="mt-2 space-y-2 text-sm text-gray-600">
-              <p>
-                This cannot be undone.{" "}
-                {roomCount > 0 ? (
-                  <>
-                    Your <strong>{roomCount}</strong> canvas{roomCount === 1 ? "" : "es"} will be
-                    deleted, along with everything anyone has drawn on {roomCount === 1 ? "it" : "them"}.
-                  </>
-                ) : (
-                  <>You have no canvases of your own to lose.</>
-                )}
-              </p>
-              <p>
-                Anything you drew on <em>other people&rsquo;s</em> canvases stays where it is &mdash;
-                it just stops being attributed to you.
-              </p>
-            </div>
+        <p className="pu-dialog-text">
+          This cannot be undone.{" "}
+          {roomCount > 0 ? (
+            <>
+              Your <strong>{roomCount}</strong> canvas{roomCount === 1 ? "" : "es"} will be
+              deleted, along with everything anyone has drawn on {roomCount === 1 ? "it" : "them"}.
+            </>
+          ) : (
+            <>You have no canvases of your own to lose.</>
+          )}
+        </p>
+        <p className="pu-dialog-text">
+          Anything you drew on <em>other people&rsquo;s</em> canvases stays where it is &mdash;
+          it just stops being attributed to you.
+        </p>
 
-            <form onSubmit={remove} className="mt-4 space-y-3">
-              {!isGuest && (
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Enter your password to confirm"
-                  autoComplete="current-password"
-                  required
-                  autoFocus
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400"
-                />
-              )}
-              {error && <p className="text-sm text-red-600">{error}</p>}
-              <div className="flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={onCancel}
-                  disabled={busy}
-                  className="rounded-lg px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 disabled:opacity-50"
-                >
-                  Keep my account
-                </button>
-                <button
-                  type="submit"
-                  disabled={busy}
-                  className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
-                >
-                  {busy ? "Deleting…" : "Delete account"}
-                </button>
-              </div>
-            </form>
+        <form onSubmit={remove}>
+          {!isGuest && (
+            <input
+              type="password"
+              name="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Enter your password to confirm"
+              aria-label="Password"
+              autoComplete="current-password"
+              required
+              autoFocus
+              aria-invalid={error ? true : undefined}
+              className="pu-input"
+            />
+          )}
+          {error && <p className="pu-error-text">{error}</p>}
+          <div className="pu-dialog-actions">
+            <button type="button" onClick={onCancel} disabled={busy} className="pu-btn">
+              Keep my account
+            </button>
+            <button
+              type="submit"
+              disabled={busy}
+              aria-busy={busy || undefined}
+              className="pu-btn pu-btn--danger-fill"
+            >
+              {busy ? "Deleting…" : "Delete account"}
+            </button>
           </div>
-        </div>
+        </form>
       </div>
     </div>
   );

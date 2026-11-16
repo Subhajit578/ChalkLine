@@ -132,58 +132,50 @@ export function AvatarPicker({
 
   return (
     <div
-      className="fixed inset-0 z-30 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm"
+      className="pu-scrim"
       onClick={onClose}
       role="dialog"
       aria-modal="true"
       aria-label="Choose an avatar"
     >
-      <div
-        className="flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
+      <div className="pu-dialog pu-dialog--wide" onClick={(e) => e.stopPropagation()}>
         {/* Header */}
-        <div className="flex items-start justify-between gap-4 border-b border-gray-100 px-7 pt-7 pb-5">
-          <div className="flex items-center gap-4">
-            <span className="inline-flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-full bg-gradient-to-br from-indigo-100 to-purple-100 ring-1 ring-black/5">
+        <div className="pu-dialog-head">
+          <div className="pu-dialog-head-main">
+            <span className="pu-avatar" style={{ width: 64, height: 64 }}>
               {avatarUrl(selected) ? (
-                <img src={avatarUrl(selected)!} alt="" className="h-full w-full" />
+                <img src={avatarUrl(selected)!} alt="" width={64} height={64} />
               ) : (
-                <span className="text-xl font-semibold text-indigo-600">
+                <span className="pu-avatar-initial" style={{ fontSize: 24 }}>
                   {username.charAt(0).toUpperCase()}
                 </span>
               )}
             </span>
             <div>
-              <h3 className="text-xl font-bold text-gray-900">Choose your avatar</h3>
-              <p className="mt-0.5 text-sm text-gray-600">
+              <h3 className="pu-dialog-title">Choose your avatar</h3>
+              <p className="pu-dialog-text">
                 {allIds.length > 0
                   ? `${allIds.length} to pick from, across ${styles?.length} styles.`
                   : "Loading the pool…"}
               </p>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            aria-label="Close"
-            className="rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
-          >
-            <X className="h-5 w-5" />
+          <button type="button" onClick={onClose} aria-label="Close" className="pu-icon-btn">
+            <X aria-hidden="true" />
           </button>
         </div>
 
         {/* Style tabs */}
         {styles && styles.length > 0 && (
-          <div className="flex gap-2 overflow-x-auto border-b border-gray-100 px-7 py-3">
+          <div className="pu-tabs" role="tablist" aria-label="Avatar styles">
             {styles.map((style) => (
               <button
                 key={style.id}
+                type="button"
+                role="tab"
+                aria-selected={style.id === activeStyle}
                 onClick={() => setActiveStyle(style.id)}
-                className={`shrink-0 rounded-full px-4 py-1.5 text-sm font-medium transition-colors ${
-                  style.id === activeStyle
-                    ? "bg-gray-900 text-white"
-                    : "bg-gray-100 text-gray-600 hover:bg-gray-200 hover:text-gray-900"
-                }`}
+                className="pu-tab"
               >
                 {style.label}
               </button>
@@ -192,40 +184,32 @@ export function AvatarPicker({
         )}
 
         {/* Grid */}
-        <div className="min-h-0 flex-1 overflow-y-auto px-7 py-6">
+        <div className="pu-faces">
           {error && !styles ? (
-            <p className="py-8 text-center text-sm text-red-600">{error}</p>
+            <p className="pu-error-text">{error}</p>
           ) : !active ? (
-            <div className="grid grid-cols-4 gap-4 sm:grid-cols-6">
+            <div className="pu-face-grid" aria-busy="true">
               {[...Array(12)].map((_, i) => (
-                <div key={i} className="aspect-square animate-pulse rounded-2xl bg-gray-100" />
+                <div key={i} className="pu-face-skel" />
               ))}
             </div>
           ) : (
-            <div className="grid grid-cols-4 gap-4 sm:grid-cols-6">
+            <div className="pu-face-grid">
               {active.ids.map((id) => {
                 const isSelected = id === selected;
                 return (
                   <button
                     key={id}
+                    type="button"
                     onClick={() => setSelected(id)}
                     aria-pressed={isSelected}
                     aria-label={`${active.label} avatar ${id.split("/")[1]}`}
-                    className={`relative aspect-square overflow-hidden rounded-2xl bg-gradient-to-br from-indigo-50 to-purple-50 transition-all hover:scale-105 ${
-                      isSelected
-                        ? "ring-2 ring-indigo-600 ring-offset-2"
-                        : "ring-1 ring-gray-200 hover:ring-gray-300"
-                    }`}
+                    className="pu-face"
                   >
-                    <img
-                      src={avatarUrl(id)!}
-                      alt=""
-                      loading="lazy"
-                      className="h-full w-full"
-                    />
+                    <img src={avatarUrl(id)!} alt="" loading="lazy" />
                     {isSelected && (
-                      <span className="absolute right-1 bottom-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-indigo-600 shadow">
-                        <Check className="h-3 w-3 text-white" strokeWidth={3} />
+                      <span className="pu-face-check">
+                        <Check aria-hidden="true" strokeWidth={3} />
                       </span>
                     )}
                   </button>
@@ -236,27 +220,26 @@ export function AvatarPicker({
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between gap-3 border-t border-gray-100 px-7 py-5">
+        <div className="pu-dialog-foot">
           <button
+            type="button"
             onClick={shuffle}
             disabled={allIds.length === 0}
-            className="inline-flex items-center gap-2 rounded-xl border border-gray-200 px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50"
+            className="pu-link"
           >
-            <Shuffle className="h-4 w-4" />
+            <Shuffle aria-hidden="true" />
             Surprise me
           </button>
-          <div className="flex items-center gap-3">
-            {error && styles && <p className="text-sm text-red-600">{error}</p>}
-            <button
-              onClick={onClose}
-              className="rounded-xl border border-gray-200 px-5 py-2.5 text-sm text-gray-700 transition-colors hover:bg-gray-50"
-            >
+          <div className="pu-dialog-foot-end">
+            {error && styles && <p className="pu-error-text">{error}</p>}
+            <button type="button" onClick={onClose} className="pu-btn">
               Cancel
             </button>
             <button
+              type="button"
               onClick={handleSave}
               disabled={!selected}
-              className="rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 px-6 py-2.5 text-sm font-medium text-white shadow transition-all hover:from-indigo-700 hover:to-purple-700 disabled:opacity-50"
+              className="pu-btn pu-btn--primary"
             >
               Save
             </button>

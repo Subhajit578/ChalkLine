@@ -22,6 +22,9 @@ services:
       # to start without an auth token. 4.0.3 is the community image.
       SERVICES: s3
       DEBUG: "0"
+      # Validate presigned signatures like R2/S3 do (LocalStack skips this by
+      # default, hiding wrong-size/type uploads until production).
+      S3_SKIP_SIGNATURE_VALIDATION: "0"
     volumes:
       # scripts here run once the service is ready: bucket, policy, CORS
       - ./infra/localstack-init:/etc/localstack/init/ready.d:ro

@@ -16,6 +16,8 @@ export type Notice = {
   id: string;
   message: string;
   tone: Tone;
+  /** Stays until dismissed. For conditions (e.g. "connection lost") that fading would imply are over. */
+  sticky?: boolean;
 };
 
 /** how long each tone stays before dismissing itself, in ms */
@@ -25,7 +27,7 @@ const LIFETIME: Record<Tone, number> = {
   success: 3000,
 };
 
-export function makeNotice(message: string, tone: Tone = "error"): Notice {
+export function makeNotice(message: string, tone: Tone = "error", sticky = false): Notice {
   return {
     id:
       typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
@@ -33,6 +35,7 @@ export function makeNotice(message: string, tone: Tone = "error"): Notice {
         : `${Date.now()}-${Math.random()}`,
     message,
     tone,
+    sticky,
   };
 }
 
@@ -95,9 +98,10 @@ function Toast({
     notice.tone === "error" ? AlertTriangle : notice.tone === "success" ? Check : Info;
 
   useEffect(() => {
+    if (notice.sticky) return;
     const timer = setTimeout(() => onDismiss(notice.id), LIFETIME[notice.tone]);
     return () => clearTimeout(timer);
-  }, [notice.id, notice.tone, onDismiss]);
+  }, [notice.id, notice.tone, notice.sticky, onDismiss]);
 
   return (
     <div

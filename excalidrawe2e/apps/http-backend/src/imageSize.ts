@@ -2,9 +2,8 @@
  * Reading an image's pixel dimensions out of its own header bytes.
  *
  * Pure parsing - no network, no storage, no image library. Every format in the
- * upload allowlist writes its dimensions within the first few hundred bytes
- * (JPEG being the exception that can need more), so the caller only has to
- * fetch a prefix of the object rather than download the whole thing.
+ * upload allowlist writes its dimensions in its header, so this is a few
+ * comparisons on bytes the caller already holds.
  *
  * This exists because HeadObject reports size and content type but cannot
  * report dimensions - it does not decode anything. Dimensions were the one
@@ -19,16 +18,6 @@
  */
 
 export type Dimensions = { width: number; height: number };
-
-/**
- * How much of an object is worth fetching to find its dimensions.
- *
- * PNG, GIF and WebP need under 32 bytes. JPEG keeps its size in an SOF marker
- * that sits after any EXIF block, and a camera photo's EXIF can carry a full
- * thumbnail, so the marker can be tens of kilobytes in. 64KB covers the
- * realistic cases while staying a fraction of the file.
- */
-export const HEADER_BYTES = 64 * 1024;
 
 /** PNG: 8-byte signature, then an IHDR chunk whose first two fields are the size. */
 function png(b: Buffer): Dimensions | null {
@@ -156,4 +145,30 @@ export function readDimensions(bytes: Buffer): Dimensions | null {
     return null;
   }
   return found;
+}
+
+/**
+ * Image type from the file's magic bytes (PNG, JPEG, GIF, WebP), not from
+ * what the uploader claimed, since the bucket serves it with whatever type
+ * is stored. Null means refuse the upload.
+ */
+export function sniffImageType(bytes: Buffer): string | null {
+  if (bytes.length >= 8 && bytes.readUInt32BE(0) === 0x89504e47 && bytes.readUInt32BE(4) === 0x0d0a1a0a) {
+    return "image/png";
+  }
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return "image/jpeg";
+  }
+  if (bytes.length >= 6) {
+    const magic = bytes.toString("ascii", 0, 6);
+    if (magic === "GIF87a" || magic === "GIF89a") return "image/gif";
+  }
+  if (
+    bytes.length >= 12 &&
+    bytes.toString("ascii", 0, 4) === "RIFF" &&
+    bytes.toString("ascii", 8, 12) === "WEBP"
+  ) {
+    return "image/webp";
+  }
+  return null;
 }

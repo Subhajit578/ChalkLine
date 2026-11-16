@@ -4,16 +4,16 @@ import { useRouter } from "next/navigation";
 import axios from "axios";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { getToken, clearToken, installSessionGuard } from "@/lib/session";
+import { API_URL as API } from "@/lib/config";
+import { errorMessage, errorStatus } from "@/lib/errors";
 import { ClaimAccountBanner } from "./ClaimAccountBanner";
 import { DeleteAccountDialog } from "./DeleteAccountDialog";
 import { Avatar } from "./Avatar";
 import { AvatarPicker } from "./AvatarPicker";
 import { makeNotice, ToastStack, type Notice } from "./Toast";
 import {
-  Sparkles,
   Plus,
   Trash2,
-  ExternalLink,
   LogOut,
   Pencil,
   Share2,
@@ -24,7 +24,10 @@ import {
 
 type Room = {
   id: number;
+  /** name */
   slug: string;
+  /** random link id; never changes */
+  shareId: string;
   createdAt: string;
 };
 
@@ -35,8 +38,6 @@ type JoinedRoom = Room & {
   ownerAvatar?: string;
   joinedAt?: string;
 };
-
-const API = "http://localhost:3001";
 
 export function Dashboard() {
   const router = useRouter();
@@ -128,9 +129,9 @@ export function Dashboard() {
   }
 // 
   /**
-   * Accepts either a full link or a bare name, so pasting what someone sent
-   * you works as well as typing the canvas name: everything up to the last
-   * "/" is dropped, along with any query string or fragment.
+   * Takes the last segment of a pasted link (minus query/fragment), which is
+   * the share id. A bare name also works for canvases you're already in, but
+   * can no longer be used to join.
    */
   function slugFromInput(value: string) {
     const trimmed = value.trim().split(/[?#]/)[0] ?? "";
@@ -147,13 +148,17 @@ export function Dashboard() {
     setJoinError(null);
     try {
       // join first, so a wrong link reports here rather than on a blank canvas
-      await axios.post(`${API}/room/${slug}/join`, {}, { headers: authHeaders() });
-      router.push(`/canvas/${slug}`);
-    } catch (err: any) {
+      const res = await axios.post(
+        `${API}/room/${encodeURIComponent(slug)}/join`,
+        {},
+        { headers: authHeaders() }
+      );
+      router.push(`/canvas/${res.data.room.shareId}`);
+    } catch (err) {
       setJoinError(
-        err?.response?.status === 404
+        errorStatus(err) === 404
           ? "No canvas with that link"
-          : err?.response?.data?.message ?? "Could not open that canvas"
+          : errorMessage(err, "Could not open that canvas")
       );
       setIsJoining(false);
     }
@@ -166,8 +171,8 @@ export function Dashboard() {
       const res = await axios.get(`${API}/rooms`, { headers: authHeaders() });
       setRooms(res.data.rooms);
       setJoinedRooms(res.data.joined ?? []);
-    } catch (err: any) {
-      setErrorMsg(err?.response?.data?.message ?? "Failed to load canvases");
+    } catch (err) {
+      setErrorMsg(errorMessage(err, "Failed to load canvases"));
     } finally {
       setIsLoading(false);
     }
@@ -184,9 +189,9 @@ export function Dashboard() {
         { slug: newSlug.trim() },
         { headers: authHeaders() }
       );
-      router.push(`/canvas/${res.data.slug}`);
-    } catch (err: any) {
-      setCreateError(err?.response?.data?.message ?? "Failed to create");
+      router.push(`/canvas/${res.data.shareId}`);
+    } catch (err) {
+      setCreateError(errorMessage(err, "Failed to create"));
     } finally {
       setIsCreating(false);
     }
@@ -210,7 +215,7 @@ export function Dashboard() {
 
     try {
       await axios.delete(`${API}/room/${room.id}`, { headers: authHeaders() });
-    } catch (err: any) {
+    } catch (err) {
       setRooms((r) => {
         if (r.some((existing) => existing.id === room.id)) return r; // already back
         const restored = [...r];
@@ -218,7 +223,7 @@ export function Dashboard() {
         return restored;
       });
       notify(
-        `Couldn't delete "${room.slug}" - ${err?.response?.data?.message ?? "the server refused"}. It's back in your list.`
+        `Couldn't delete "${room.slug}" - ${errorMessage(err, "the server refused")}. It's back in your list.`
       );
     }
   }
@@ -248,22 +253,23 @@ export function Dashboard() {
       if (res.data?.slug && res.data.slug !== wanted) {
         setRooms((r) => r.map((room) => (room.id === target.id ? { ...room, slug: res.data.slug } : room)));
       }
-    } catch (err: any) {
+    } catch (err) {
       setRooms((r) => r.map((room) => (room.id === target.id ? { ...room, slug: previous } : room)));
       notify(
-        `Couldn't rename to "${wanted}" - ${err?.response?.data?.message ?? "the server refused"}. Still "${previous}".`
+        `Couldn't rename to "${wanted}" - ${errorMessage(err, "the server refused")}. Still "${previous}".`
       );
     }
   }
 
   async function handleShare(room: Room) {
-    const url = `${window.location.origin}/canvas/${room.slug}`;
+    const url = `${window.location.origin}/canvas/${room.shareId}`;
     try {
       await navigator.clipboard.writeText(url);
       setCopiedId(room.id);
       setTimeout(() => setCopiedId((c) => (c === room.id ? null : c)), 1500);
     } catch {
-      alert(url);
+      // clipboard unavailable (insecure origin or denied): show the link to copy by hand
+      notify(`Copy this link: ${url}`, "info");
     }
   }
 
@@ -272,63 +278,68 @@ export function Dashboard() {
     router.push("/signin");
   }
 
+  const formatDate = (iso: string) =>
+    new Date(iso).toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-cyan-50">
-      {/* Top bar */}
-      <header className="border-b border-gray-100 bg-white/70 backdrop-blur-sm sticky top-0 z-10">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="inline-flex items-center justify-center w-10 h-10 bg-gradient-to-r from-indigo-500 to-purple-600 rounded-xl shadow">
-              <Sparkles className="w-5 h-5 text-white" />
-            </div>
-            <h1 className="text-xl font-bold text-gray-900">My Canvases</h1>
-          </div>
-          <div className="flex items-center gap-4">
-            {/* The avatar is the way into the picker. Nothing else on this
-                page is about the account itself, so a settings screen for one
-                choice would be a page nobody would find. */}
-            {me && (
-              <button
-                onClick={() => setPickingAvatar(true)}
-                title="Change your avatar"
-                className="group flex items-center gap-2.5 rounded-full py-1 pr-3 pl-1 transition-colors hover:bg-gray-100"
-              >
-                <Avatar id={me.avatar} username={me.username} size={34} />
-                <span className="hidden text-sm font-medium text-gray-700 sm:block">
-                  {me.username}
-                </span>
+    <div className="pu">
+      {/* Top bar: a strip of copy paper pinned across the board */}
+      <header className="pu-top">
+        <div className="pu-wrap">
+          <div className="pu-strip">
+            <h1 className="pu-wordmark">My Canvases</h1>
+            <div className="pu-strip-end">
+              {/* The avatar is the way into the picker. Nothing else on this
+                  page is about the account itself, so a settings screen for one
+                  choice would be a page nobody would find. */}
+              {me && (
+                <button
+                  type="button"
+                  onClick={() => setPickingAvatar(true)}
+                  title="Change your avatar"
+                  className="pu-me"
+                >
+                  <Avatar id={me.avatar} username={me.username} size={34} />
+                  <span className="pu-me-name">{me.username}</span>
+                </button>
+              )}
+              <button type="button" onClick={handleLogout} className="pu-link">
+                <LogOut aria-hidden="true" />
+                Sign out
               </button>
-            )}
-            <button
-              onClick={handleLogout}
-              className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900 transition-colors"
-            >
-              <LogOut className="w-4 h-4" />
-              Sign out
-            </button>
+            </div>
           </div>
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto px-6 py-10">
+      <main className="pu-wrap pu-main">
         {me?.isGuest && (
           <ClaimAccountBanner
             username={me.username}
             onClaimed={() => setMe({ ...me, isGuest: false })}
           />
         )}
+
         {/* Heading row */}
-        <div className="flex items-center justify-between mb-8">
-          <div>
-            <h2 className="text-3xl font-bold text-gray-900">Your work</h2>
-            <p className="text-gray-600 mt-1">
-              {rooms.length} {rooms.length === 1 ? "canvas" : "canvases"}
-            </p>
+        <div className="pu-head">
+          <div className="pu-head-title">
+            <h2 className="pu-poster">Your work</h2>
+            {!isLoading && !errorMsg && (
+              <p className="pu-count">
+                <span className="num">{rooms.length}</span>
+                {rooms.length === 1 ? "canvas" : "canvases"}
+              </p>
+            )}
           </div>
-          <div className="flex items-center gap-3">
+
+          <div className="pu-actions">
             {/* Paste a link someone shared, or type the canvas name */}
-            <form onSubmit={handleJoin} className="flex items-center gap-2">
-              <div className="relative">
+            <form onSubmit={handleJoin} className="pu-join">
+              <div className="pu-join-field">
                 <input
                   value={joinInput}
                   onChange={(e) => {
@@ -336,11 +347,13 @@ export function Dashboard() {
                     setJoinError(null);
                   }}
                   placeholder="Paste a canvas link"
-                  aria-label="Canvas link or name"
-                  className="w-56 text-gray-900 placeholder:text-gray-500 bg-white/80 border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-colors"
+                  aria-label="Canvas link"
+                  aria-invalid={joinError ? true : undefined}
+                  aria-describedby={joinError ? "join-error" : undefined}
+                  className="pu-input"
                 />
                 {joinError && (
-                  <p className="absolute left-0 top-full mt-1 text-xs text-red-600">
+                  <p id="join-error" className="pu-slip">
                     {joinError}
                   </p>
                 )}
@@ -348,233 +361,214 @@ export function Dashboard() {
               <button
                 type="submit"
                 disabled={isJoining || joinInput.trim() === ""}
-                className="flex items-center gap-2 bg-white text-gray-900 border border-gray-200 px-4 py-2.5 rounded-xl font-medium hover:bg-gray-50 shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                aria-busy={isJoining || undefined}
+                className="pu-btn"
               >
-                <Users className="w-4 h-4" />
+                <Users aria-hidden="true" />
                 {isJoining ? "Joining…" : "Join"}
               </button>
             </form>
 
             <button
+              type="button"
               onClick={() => setIsCreateOpen(true)}
-              className="flex items-center gap-2 bg-gradient-to-r from-indigo-600 to-purple-600 text-white px-5 py-2.5 rounded-xl font-medium hover:from-indigo-700 hover:to-purple-700 shadow-lg hover:shadow-xl transition-all"
+              className="pu-btn pu-btn--primary"
             >
-              <Plus className="w-5 h-5" />
+              <Plus aria-hidden="true" />
               New canvas
             </button>
           </div>
         </div>
 
         {isLoading ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+          <ul className="pu-grid" aria-label="Loading canvases" aria-busy="true">
             {[...Array(6)].map((_, i) => (
-              <div
-                key={i}
-                className="h-56 bg-white/60 rounded-2xl border border-gray-100 animate-pulse"
-              />
+              <li key={i} className="pu-skel" />
             ))}
-          </div>
+          </ul>
         ) : errorMsg ? (
-          <div className="bg-red-50 border border-red-200 rounded-2xl p-6 text-red-700">
+          <div className="pu-notice pu-notice--error" role="alert">
             {errorMsg}
           </div>
         ) : rooms.length === 0 ? (
-          <div className="bg-white/80 backdrop-blur-sm rounded-3xl border border-gray-100 p-16 text-center shadow">
-            <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-r from-indigo-500 to-purple-600 rounded-2xl mb-4 shadow-lg">
-              <Sparkles className="w-8 h-8 text-white" />
-            </div>
-            <h3 className="text-xl font-semibold text-gray-900 mb-2">
-              No canvases yet
-            </h3>
-            <p className="text-gray-600 mb-6">
-              Create your first canvas to start drawing.
-            </p>
+          <div className="pu-notice">
+            <h3>No canvases yet</h3>
+            <p>Create your first canvas to start drawing.</p>
             <button
+              type="button"
               onClick={() => setIsCreateOpen(true)}
-              className="inline-flex items-center gap-2 bg-gradient-to-r from-indigo-600 to-purple-600 text-white px-5 py-2.5 rounded-xl font-medium hover:from-indigo-700 hover:to-purple-700 shadow"
+              className="pu-btn"
             >
-              <Plus className="w-5 h-5" />
+              <Plus aria-hidden="true" />
               New canvas
             </button>
           </div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+          <ul className="pu-grid">
             {rooms.map((room) => (
-              <div
-                key={room.id}
-                className="group bg-white/80 backdrop-blur-sm rounded-2xl border border-gray-100 shadow hover:shadow-xl transition-all overflow-hidden relative"
-              >
-                {/* Thumbnail placeholder */}
-                <div
-                  onClick={() => router.push(`/canvas/${room.slug}`)}
-                  className="h-32 bg-gradient-to-br from-indigo-100 via-purple-100 to-cyan-100 cursor-pointer relative overflow-hidden"
+              <li key={room.id} className="pu-sheet">
+                <button
+                  type="button"
+                  onClick={() => router.push(`/canvas/${room.shareId}`)}
+                  className="pu-sheet-open"
+                  aria-label={`Open ${room.slug}`}
                 >
-                  <div className="absolute inset-0 flex items-center justify-center opacity-30 group-hover:opacity-50 transition-opacity">
-                    <Sparkles className="w-12 h-12 text-indigo-500" />
-                  </div>
-                </div>
+                  <span className="pu-sheet-name">{room.slug}</span>
+                </button>
 
-                {/* Card body */}
-                <div className="p-5">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0 flex-1">
-                      <h3 className="font-semibold text-gray-900 truncate">
-                        {room.slug}
-                      </h3>
-                      <p className="text-xs text-gray-500 mt-1">
-                        {new Date(room.createdAt).toLocaleDateString(undefined, {
-                          month: "short",
-                          day: "numeric",
-                          year: "numeric",
-                        })}
-                      </p>
-                    </div>
+                <div className="pu-sheet-foot">
+                  <time className="pu-meta" dateTime={room.createdAt}>
+                    {formatDate(room.createdAt)}
+                  </time>
 
-                    {/* Per-card menu */}
-                    <div className="relative">
+                  <div className="pu-sheet-actions">
+                    <button
+                      type="button"
+                      onClick={() => router.push(`/canvas/${room.shareId}`)}
+                      className="pu-link"
+                    >
+                      Open
+                    </button>
+
+                    {/* Per-sheet menu */}
+                    <div className="pu-menu-wrap">
                       <button
+                        type="button"
                         onClick={(e) => {
                           e.stopPropagation();
                           setOpenMenuId(openMenuId === room.id ? null : room.id);
                         }}
-                        className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+                        className="pu-icon-btn"
                         aria-label="More options"
+                        aria-haspopup="menu"
+                        aria-expanded={openMenuId === room.id}
                       >
-                        <MoreVertical className="w-4 h-4" />
+                        <MoreVertical aria-hidden="true" />
                       </button>
                       {openMenuId === room.id && (
                         <div
+                          role="menu"
                           onClick={(e) => e.stopPropagation()}
-                          className="absolute right-0 top-9 w-40 bg-white rounded-xl shadow-lg border border-gray-100 py-1 z-10"
+                          className="pu-menu"
                         >
                           <button
+                            type="button"
+                            role="menuitem"
                             onClick={() => {
                               setRenameTarget(room);
                               setRenameSlug(room.slug);
                               setOpenMenuId(null);
                             }}
-                            className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                            className="pu-menu-item"
                           >
-                            <Pencil className="w-4 h-4" />
+                            <Pencil aria-hidden="true" />
                             Rename
                           </button>
                           <button
+                            type="button"
+                            role="menuitem"
                             onClick={() => {
                               handleShare(room);
                               setOpenMenuId(null);
                             }}
-                            className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                            className="pu-menu-item"
                           >
                             {copiedId === room.id ? (
                               <>
-                                <Check className="w-4 h-4 text-green-600" />
+                                <Check aria-hidden="true" className="pu-copied" />
                                 Copied!
                               </>
                             ) : (
                               <>
-                                <Share2 className="w-4 h-4" />
+                                <Share2 aria-hidden="true" />
                                 Share link
                               </>
                             )}
                           </button>
                           <button
+                            type="button"
+                            role="menuitem"
                             onClick={() => {
                               handleDelete(room.id);
                               setOpenMenuId(null);
                             }}
-                            className="w-full flex items-center gap-2 px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors"
+                            className="pu-menu-item pu-menu-item--danger"
                           >
-                            <Trash2 className="w-4 h-4" />
+                            <Trash2 aria-hidden="true" />
                             Delete
                           </button>
                         </div>
                       )}
                     </div>
                   </div>
-
-                  <button
-                    onClick={() => router.push(`/canvas/${room.slug}`)}
-                    className="mt-4 w-full flex items-center justify-center gap-1.5 bg-gray-900 text-white text-sm py-2 rounded-lg hover:bg-gray-800 transition-colors"
-                  >
-                    <ExternalLink className="w-4 h-4" />
-                    Open
-                  </button>
                 </div>
-              </div>
+              </li>
             ))}
-          </div>
+          </ul>
         )}
 
         {/* Rooms belonging to other people, collected by opening their links.
             No rename or delete here - they are not yours to change. */}
         {joinedRooms.length > 0 && (
-          <section className="mt-12">
-            <h2 className="text-lg font-semibold text-gray-900 mb-1">Shared with you</h2>
-            <p className="text-sm text-gray-600 mb-5">
-              Canvases you opened from someone else&apos;s link.
-            </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+          <section className="pu-section">
+            <div className="pu-section-head">
+              <h2>Shared with you</h2>
+              <p>Canvases you opened from someone else&apos;s link.</p>
+            </div>
+            <ul className="pu-grid">
               {joinedRooms.map((room) => (
-                <div
-                  key={room.id}
-                  className="group bg-white/80 backdrop-blur-sm rounded-2xl border border-gray-100 shadow hover:shadow-xl transition-all overflow-hidden"
-                >
-                  <div
-                    onClick={() => router.push(`/canvas/${room.slug}`)}
-                    className="h-32 bg-gradient-to-br from-emerald-100 via-cyan-100 to-indigo-100 cursor-pointer relative overflow-hidden"
+                <li key={room.id} className="pu-sheet">
+                  <button
+                    type="button"
+                    onClick={() => router.push(`/canvas/${room.shareId}`)}
+                    className="pu-sheet-open"
                   >
-                    <div className="absolute inset-0 flex items-center justify-center opacity-30 group-hover:opacity-50 transition-opacity">
-                      <Users className="w-12 h-12 text-emerald-600" />
-                    </div>
-                  </div>
-
-                  <div className="p-4">
-                    <h3 className="font-semibold text-gray-900 truncate">{room.slug}</h3>
-                    <div className="mt-1 flex items-center gap-2">
+                    <span className="pu-sheet-name">{room.slug}</span>
+                    <span className="pu-sheet-owner">
                       <Avatar
                         id={room.ownerAvatar}
                         username={room.owner}
                         size={22}
                         lazy
                       />
-                      <p className="truncate text-sm text-gray-600">
-                        {room.owner ? `Owned by ${room.owner}` : "Shared canvas"}
-                      </p>
-                    </div>
+                      <span>{room.owner ? `Owned by ${room.owner}` : "Shared canvas"}</span>
+                    </span>
+                  </button>
 
+                  <div className="pu-sheet-foot">
+                    <span />
                     <button
-                      onClick={() => router.push(`/canvas/${room.slug}`)}
-                      className="mt-4 w-full flex items-center justify-center gap-1.5 bg-gray-900 text-white text-sm py-2 rounded-lg hover:bg-gray-800 transition-colors"
+                      type="button"
+                      onClick={() => router.push(`/canvas/${room.shareId}`)}
+                      className="pu-link"
                     >
-                      <ExternalLink className="w-4 h-4" />
                       Open
                     </button>
                   </div>
-                </div>
+                </li>
               ))}
-            </div>
+            </ul>
           </section>
         )}
 
         {/* Set apart at the foot of the page, deliberately plain and far from
             Sign out - the two are one slip apart otherwise, and only one of
             them is reversible. */}
-        <section className="mt-16 border-t border-gray-200 pt-6">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <p className="text-sm font-medium text-gray-700">Delete account</p>
-              <p className="text-sm text-gray-500">
-                Removes your account and your canvases. Work you did on other people&rsquo;s
-                canvases stays.
-              </p>
-            </div>
-            <button
-              onClick={() => setDeletingAccount(true)}
-              className="rounded-lg border border-red-200 px-4 py-2 text-sm font-medium text-red-600 hover:bg-red-50"
-            >
-              Delete account
-            </button>
+        <section className="pu-danger">
+          <div>
+            <p className="pu-danger-title">Delete account</p>
+            <p>
+              Removes your account and your canvases. Work you did on other people&rsquo;s
+              canvases stays.
+            </p>
           </div>
+          <button
+            type="button"
+            onClick={() => setDeletingAccount(true)}
+            className="pu-btn pu-btn--danger"
+          >
+            Delete account
+          </button>
         </section>
       </main>
 
@@ -616,22 +610,22 @@ export function Dashboard() {
 
       {/* Create modal */}
       {isCreateOpen && (
-        <Modal onClose={() => setIsCreateOpen(false)}>
-          <h3 className="text-2xl font-bold text-gray-900 mb-2">New canvas</h3>
-          <p className="text-gray-600 mb-6">
-            Pick a name. This becomes your shareable link.
-          </p>
-          <form onSubmit={handleCreate} className="space-y-4">
+        <Modal onClose={() => setIsCreateOpen(false)} labelledBy="create-title">
+          <h3 id="create-title" className="pu-dialog-title">New canvas</h3>
+          <p className="pu-dialog-text">Pick a name. You can rename it later without breaking its share link.</p>
+          <form onSubmit={handleCreate}>
             <input
               autoFocus
               type="text"
               value={newSlug}
               onChange={(e) => setNewSlug(e.target.value)}
               placeholder="my-cool-canvas"
-              className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-gray-50/50"
+              aria-label="Canvas name"
+              aria-invalid={createError ? true : undefined}
+              className="pu-input"
               required
             />
-            {createError && <p className="text-sm text-red-600">{createError}</p>}
+            {createError && <p className="pu-error-text">{createError}</p>}
             <ModalButtons
               onCancel={() => setIsCreateOpen(false)}
               submitLabel={isCreating ? "Creating..." : "Create"}
@@ -643,23 +637,21 @@ export function Dashboard() {
 
       {/* Rename modal */}
       {renameTarget && (
-        <Modal onClose={() => setRenameTarget(null)}>
-          <h3 className="text-2xl font-bold text-gray-900 mb-2">
-            Rename canvas
-          </h3>
-          <p className="text-gray-600 mb-6">
-            Note: this changes the shareable link.
-          </p>
-          <form onSubmit={handleRename} className="space-y-4">
+        <Modal onClose={() => setRenameTarget(null)} labelledBy="rename-title">
+          <h3 id="rename-title" className="pu-dialog-title">Rename canvas</h3>
+          <p className="pu-dialog-text">The share link stays the same.</p>
+          <form onSubmit={handleRename}>
             <input
               autoFocus
               type="text"
               value={renameSlug}
               onChange={(e) => setRenameSlug(e.target.value)}
-              className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-gray-50/50"
+              aria-label="New canvas name"
+              aria-invalid={renameError ? true : undefined}
+              className="pu-input"
               required
             />
-            {renameError && <p className="text-sm text-red-600">{renameError}</p>}
+            {renameError && <p className="pu-error-text">{renameError}</p>}
             <ModalButtons
               onCancel={() => setRenameTarget(null)}
               submitLabel="Save"
@@ -677,17 +669,19 @@ export function Dashboard() {
 function Modal({
   children,
   onClose,
+  labelledBy,
 }: {
   children: React.ReactNode;
   onClose: () => void;
+  labelledBy?: string;
 }) {
   return (
-    <div
-      className="fixed inset-0 z-20 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
-      onClick={onClose}
-    >
+    <div className="pu-scrim" onClick={onClose}>
       <div
-        className="w-full max-w-md bg-white rounded-3xl shadow-2xl p-8"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={labelledBy}
+        className="pu-dialog"
         onClick={(e) => e.stopPropagation()}
       >
         {children}
@@ -706,18 +700,14 @@ function ModalButtons({
   disabled: boolean;
 }) {
   return (
-    <div className="flex gap-3 pt-2">
-      <button
-        type="button"
-        onClick={onCancel}
-        className="flex-1 py-3 rounded-xl border border-gray-200 text-gray-700 hover:bg-gray-50 transition-colors"
-      >
+    <div className="pu-dialog-actions">
+      <button type="button" onClick={onCancel} className="pu-btn">
         Cancel
       </button>
       <button
         type="submit"
         disabled={disabled}
-        className="flex-1 py-3 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-medium hover:from-indigo-700 hover:to-purple-700 shadow disabled:opacity-50"
+        className="pu-btn pu-btn--primary"
       >
         {submitLabel}
       </button>

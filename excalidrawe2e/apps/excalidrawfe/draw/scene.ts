@@ -64,6 +64,12 @@ export type PaintOptions = {
   highlightAlpha?: (shape: Shape) => number | null;
 
   /**
+   * World-coordinate area being painted; shapes fully outside it are skipped.
+   * Live canvas passes the viewport plus a margin; export omits it (paint all).
+   */
+  visible?: { left: number; top: number; right: number; bottom: number };
+
+  /**
    * Told about an image whose bytes are not in the map.
    *
    * The live canvas starts a fetch and repaints when it lands. The exporter
@@ -84,8 +90,16 @@ export function paintShapes(
   shapes: readonly Shape[],
   options: PaintOptions
 ) {
+  const view = options.visible;
   for (const shape of shapes) {
     if (shape.id === options.skipId) continue;
+
+    if (view) {
+      const b = boundsOf(shape);
+      if (b.right < view.left || b.left > view.right || b.bottom < view.top || b.top > view.bottom) {
+        continue;
+      }
+    }
 
     const color = options.color(shape.color);
 

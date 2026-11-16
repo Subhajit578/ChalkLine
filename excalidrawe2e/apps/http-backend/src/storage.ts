@@ -3,6 +3,8 @@ import {
   PutObjectCommand,
   HeadObjectCommand,
   GetObjectCommand,
+  DeleteObjectCommand,
+  ListObjectsV2Command,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { createGuard } from "@repo/backend-common/resilience";
@@ -10,10 +12,8 @@ import { createGuard } from "@repo/backend-common/resilience";
 /**
  * The object store is the second dependency that can hang.
  *
- * Only headObject reaches it - presigning is local HMAC and publicUrl is
- * string building, so neither can block. But headObject runs on every upload
- * confirm, and a wedged store would leave those requests holding sockets and
- * Node handles for as long as the SDK's own retries take.
+ * Presigning and publicUrl are local and can't block. Every network call
+ * here goes through this guard, so a wedged store can't pile up requests.
  *
  * Tighter limits than the database gets: an existence check should be fast,
  * nothing else in the app depends on it, and the sensible answer when it is
@@ -103,42 +103,53 @@ export const s3 = new S3Client({
 });
 
 /**
- * A URL the browser may PUT these exact bytes to, and nothing else.
- *
- * Signing happens locally - no network call - so this is cheap. The signature
- * covers the method, the bucket and the key, so a URL issued for one image
- * cannot be reused to write another, and it stops being valid after the expiry
- * above.
- *
- * It does *not* cover the body, which does not exist yet at signing time
- * (X-Amz-Content-Sha256=UNSIGNED-PAYLOAD), nor the content type, which the
- * presigner leaves out of SignedHeaders. So the URL authorises a write of this
- * key, not a write of particular bytes - which is why /files/confirm checks
- * what actually landed rather than trusting that it was what we signed for.
- *
- * This is what keeps the bytes off the API server: the browser uploads
- * straight to the store, and this process only ever handles the small JSON
- * either side of it.
+ * Holding area for uploads. Browsers can only write under this prefix, never
+ * to the final hash key that boards read from (which would let them
+ * overwrite an image everyone sees). Only the server writes final keys,
+ * after hashing the bytes itself. Namespaced per account so simultaneous
+ * uploads of the same picture don't collide.
  */
-export function presignPut(key: string, contentType: string): Promise<string> {
+export const TEMP_PREFIX = "tmp/";
+
+export function tempKey(userId: string, hash: string): string {
+  return `${TEMP_PREFIX}${userId}/${hash}`;
+}
+
+/**
+ * URL the browser may PUT one pending upload to.
+ *
+ * Content-Type and Content-Length are signed, so S3/R2 reject a different
+ * type or size. The body itself can't be signed (UNSIGNED-PAYLOAD), which is
+ * fine: nothing is trusted until /files/confirm downloads and hashes it.
+ * The bytes go straight to the store, not through this server.
+ */
+export function presignPut(
+  key: string,
+  contentType: string,
+  contentLength: number
+): Promise<string> {
   return getSignedUrl(
     s3,
     new PutObjectCommand({
       Bucket: STORAGE_BUCKET,
       Key: key,
       ContentType: contentType,
+      ContentLength: contentLength,
     }),
-    { expiresIn: PRESIGN_EXPIRY_SECONDS }
+    {
+      expiresIn: PRESIGN_EXPIRY_SECONDS,
+      // otherwise the presigner leaves these out of the signature
+      signableHeaders: new Set(["content-type", "content-length"]),
+    }
   );
 }
 
-/**
- * What the store says about an object, or null when it has none.
- *
- * Used to confirm an upload really happened before a row is written. The
- * client reporting success is a claim, not evidence - trusting it would let
- * anyone register rows for objects that do not exist.
- */
+/** HTTP status carried by a storage error, if any. */
+function statusOf(err: unknown): number | undefined {
+  return (err as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode;
+}
+
+/** Size and type the store reports for a key, or null if missing. Confirms an upload really happened. */
 export async function headObject(
   key: string
 ): Promise<{ size: number; mimeType: string } | null> {
@@ -151,8 +162,7 @@ export async function headObject(
       mimeType: head.ContentType ?? "application/octet-stream",
     };
   } catch (err) {
-    const status = (err as { $metadata?: { httpStatusCode?: number } }).$metadata
-      ?.httpStatusCode;
+    const status = statusOf(err);
     // 404 and 403 both mean "not there as far as we are concerned"; anything
     // else is a storage fault the caller should hear about
     if (status === 404 || status === 403) return null;
@@ -172,38 +182,86 @@ export function publicUrl(key: string): string {
 }
 
 /**
- * The first `length` bytes of an object, or null when it has none.
- *
- * A ranged GET, so the transfer is the prefix rather than the whole file -
- * reading a 400KB image's dimensions costs a few kilobytes. Ranges are part of
- * the S3 API proper, so this behaves the same on LocalStack, R2 and S3.
- *
- * Used by /files/confirm to read the real pixel dimensions out of the stored
- * header instead of believing the client's.
+ * An object's bytes, or null if missing. Reads at most `maxBytes + 1`, so the
+ * caller can detect "too large" without downloading the whole object.
  */
-export async function getObjectPrefix(
+export async function getObjectBytes(
   key: string,
-  length: number
+  maxBytes: number
 ): Promise<Buffer | null> {
   try {
-    const res = await s3.send(
-      new GetObjectCommand({
-        Bucket: STORAGE_BUCKET,
-        Key: key,
-        // inclusive on both ends, so subtract one
-        Range: `bytes=0-${length - 1}`,
-      })
+    const res = await storageGuard.run(() =>
+      s3.send(
+        new GetObjectCommand({
+          Bucket: STORAGE_BUCKET,
+          Key: key,
+          // inclusive range: maxBytes + 1 bytes
+          Range: `bytes=0-${maxBytes}`,
+        })
+      )
     );
     if (!res.Body) return null;
     // the SDK's stream helper, rather than hand-rolling a chunk collector
-    const bytes = await res.Body.transformToByteArray();
-    return Buffer.from(bytes);
+    return Buffer.from(await res.Body.transformToByteArray());
   } catch (err) {
-    const status = (err as { $metadata?: { httpStatusCode?: number } }).$metadata
-      ?.httpStatusCode;
+    const status = statusOf(err);
     // 404 and 403 mean there is nothing to read; 416 means the object is
-    // shorter than the range, which a tiny image legitimately is
+    // empty object
     if (status === 404 || status === 403 || status === 416) return null;
     throw err;
   }
+}
+
+/**
+ * Writes an object under its final key. Only the server does this, with the
+ * type it sniffed from the bytes (not the uploader's claim). `immutable` is
+ * safe because the key is the hash of the content.
+ */
+export async function putObject(key: string, body: Buffer, contentType: string): Promise<void> {
+  await storageGuard.run(() =>
+    s3.send(
+      new PutObjectCommand({
+        Bucket: STORAGE_BUCKET,
+        Key: key,
+        Body: body,
+        ContentType: contentType,
+        CacheControl: "public, max-age=31536000, immutable",
+      })
+    )
+  );
+}
+
+/** Deletes an object; a missing one is not an error. */
+export async function deleteObject(key: string): Promise<void> {
+  await storageGuard.run(() =>
+    s3.send(new DeleteObjectCommand({ Bucket: STORAGE_BUCKET, Key: key }))
+  );
+}
+
+/** Keys under `prefix` last modified before `olderThan`, capped at `limit` so a sweep stays bounded. */
+export async function listOlderThan(
+  prefix: string,
+  olderThan: Date,
+  limit = 1000
+): Promise<string[]> {
+  const keys: string[] = [];
+  let token: string | undefined;
+  do {
+    const page = await storageGuard.run(() =>
+      s3.send(
+        new ListObjectsV2Command({
+          Bucket: STORAGE_BUCKET,
+          Prefix: prefix,
+          ContinuationToken: token,
+        })
+      )
+    );
+    for (const object of page.Contents ?? []) {
+      if (object.Key && object.LastModified && object.LastModified < olderThan) {
+        keys.push(object.Key);
+      }
+    }
+    token = page.IsTruncated ? page.NextContinuationToken : undefined;
+  } while (token && keys.length < limit);
+  return keys.slice(0, limit);
 }

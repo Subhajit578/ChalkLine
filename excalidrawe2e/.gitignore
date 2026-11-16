@@ -40,3 +40,6 @@ yarn-error.log*
 # Local working notes for Claude Code, not part of the project
 CLAUDE.md
 .claude/
+
+# TypeScript build state
+*.tsbuildinfo

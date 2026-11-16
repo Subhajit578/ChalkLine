@@ -1,0 +1,24 @@
+[
+ {
+  "mode": "redesign",
+  "depth": "full",
+  "scope": "app",
+  "shape": "app screen",
+  "theme": "pasteup",
+  "axes": "mid/display-condensed/chromatic-yellow",
+  "nav": "kept top bar as a copy-paper strip",
+  "footer": "none (app)",
+  "imagery": "none",
+  "photos": [],
+  "signature": "every canvas a sheet of copy paper on kraft; the count on the one fluorescent sheet",
+  "sections": [
+   "head",
+   "own canvases",
+   "shared with you",
+   "delete account"
+  ],
+  "waived": [],
+  "prompt": "redesign the Dashboard page",
+  "date": "2026-11-09"
+ }
+]

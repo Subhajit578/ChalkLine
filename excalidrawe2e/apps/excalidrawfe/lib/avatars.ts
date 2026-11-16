@@ -11,8 +11,7 @@
  */
 
 import axios from "axios";
-
-const API = "http://localhost:3001";
+import { API_URL as API } from "./config";
 
 /** One style, as the picker groups the pool. */
 export type AvatarStyle = {

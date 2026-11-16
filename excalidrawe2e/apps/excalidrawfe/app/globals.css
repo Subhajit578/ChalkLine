@@ -19,6 +19,12 @@ body {
   font-family: Arial, Helvetica, sans-serif;
 }
 
+/* no sideways page scroll from anything that overhangs, without breaking sticky */
+html,
+body {
+  overflow-x: clip;
+}
+
 /*
  * Next.js renders its whole development overlay into <nextjs-portal>: the
  * floating badge, and the error card that brings the badge back even with

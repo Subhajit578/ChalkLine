@@ -1,9 +1,11 @@
 import { Tool } from "@/component/Canvas";
-import { getExistingShapes } from "./http";
+import { BoardGoneError, getExistingShapes } from "./http";
+import type { OutgoingMessage, RoomConnection, ServerMessage } from "./connection";
+import { isDrawable } from "./shapeGuard";
 import { imageUrl, uploadImage, unsupportedReason, UploadError } from "./images";
 import { DEFAULT_COLOR, resolveColor, THEMES, type ThemeName } from "./theme";
 import { SELECT_TOLERANCE, ERASER_RADIUS, ShapeRenderer, type Point } from "./renderer";
-import { circleFromDrag, elbowPoints } from "./routing";
+import { circleFromDrag, elbowPoints, simplifyStroke } from "./routing";
 import { paintShapes } from "./scene";
 import {
   renderShapesToBlob,
@@ -58,6 +60,26 @@ const RESIZE_CURSOR: Record<Corner, string> = {
 /** how long a newly drawn shape keeps its fading pad, in ms */
 const APPEAR_MS = 450;
 
+/** drop a remote live stroke after this long without a new point */
+const REMOTE_STROKE_TTL_MS = 15_000;
+
+/** how often pencil points are sent, in ms */
+const STROKE_SEND_MS = 30;
+
+/** Margin (screen px) past the viewport where shapes are still painted: covers strokes, arrowheads and the appear pad. */
+const CULL_MARGIN = 64;
+
+/** Server limits, mirrored so we never send what will be refused. Keep in step with packages/common/src/protocol.ts. */
+const MAX_POINTS = 10_000;
+const MAX_BATCH = 2000;
+const MAX_STROKE_POINTS = 256;
+
+/** Max JSON chars per batched message; larger selections are split. */
+const MAX_BATCH_CHARS = 512 * 1024;
+
+/** Max messages held during a load before reloading instead. */
+const MAX_BACKLOG = 5000;
+
 /* ────────────────────────────────────────────────────────────────────────────
  * Types
  * ──────────────────────────────────────────────────────────────────────────── */
@@ -99,7 +121,7 @@ export type Shape =
  * A stroke someone else is drawing right now. Held only until their finished
  * shape arrives, then dropped in favour of the saved version. Never persisted.
  */
-type RemoteStroke = { color: string; points: Point[] };
+type RemoteStroke = { color: string; points: Point[]; seenAt: number };
 /**
  * React's cue to open a text editor.
  *
@@ -204,7 +226,10 @@ export class Game {
   /* ── the appear animation ───────────────────────────────────────────── */
   /** shape id -> when it appeared, so a fading pad can be drawn behind it */
   private appearing: Map<string, number> = new Map();
-  private animationFrame: number | null = null;
+  /** pending animation-frame handle, if a repaint is scheduled */
+  private frame: number | null = null;
+  /** Last pointer position (world). paint() draws the in-progress shape from this. */
+  private pointer: Point | null = null;
   /**
    * Where the board is being looked at from.
    *
@@ -252,7 +277,7 @@ export class Game {
    * A set rather than an array: selecting is idempotent, shift-click toggles,
    * and membership is asked far more often than order matters. Nothing here
    * implies the shapes still exist - a shape deleted elsewhere leaves its id
-   * behind until forgetShape or the sweep in clearCanvas removes it.
+   * behind until forgetShape or the sweep in paint() removes it.
    */
   private selectedIds: Set<string> = new Set();
   /**
@@ -306,7 +331,7 @@ export class Game {
   /**
    * hash -> decoded bitmap, or how far the attempt to get one has got.
    *
-   * The canvas is immediate mode: clearCanvas must draw synchronously, so a
+   * The canvas is immediate mode: paint() must draw synchronously, so a
    * bitmap either is in memory when the frame runs or it is not. Fetching is
    * kicked off on the first frame that needs it, a placeholder is drawn, and
    * the arrival triggers a repaint.
@@ -330,7 +355,19 @@ export class Game {
   private imageLoads: Map<string, Promise<void>> = new Map();
 
   /* ── networking ─────────────────────────────────────────────────────── */
-  socket: WebSocket;
+  private connection: RoomConnection;
+  /** True while the saved board is being fetched; incoming messages wait in `backlog` (see load()). */
+  private loading = true;
+  private backlog: ServerMessage[] = [];
+  /** load counter, so a stale load can tell it was superseded */
+  private loadRun = 0;
+  private loadFailures = 0;
+  private loadRetry: ReturnType<typeof setTimeout> | null = null;
+  /** pencil points not yet sent */
+  private strokeOutbox: Point[] = [];
+  private strokeTimer: ReturnType<typeof setInterval> | null = null;
+  private strokeSweep: ReturnType<typeof setTimeout> | null = null;
+  private destroyed = false;
   /** set by React; asks it to open a text editor at a point. See setOnTextRequest. */
   private onTextRequest: ((req: TextRequest) => void) | null = null;
 
@@ -350,30 +387,35 @@ export class Game {
    * ══════════════════════════════════════════════════════════════════════ */
 
   /**
-   * The socket must already be open and joined to the room - RoomCanvas does
-   * that before constructing this. `theme` is only the starting value; later
-   * changes arrive through setTheme so the board is never rebuilt for one.
+   * `connection` owns the socket and may still be connecting. The board is
+   * loaded when it reports the room joined, and again after each reconnect
+   * (see load()). `theme` is only the initial value; later changes use setTheme.
    */
   constructor(
     canvas: HTMLCanvasElement,
     roomId: string,
-    socket: WebSocket,
+    connection: RoomConnection,
     theme: ThemeName = "dark"
   ) {
     this.canvas = canvas;
     this.renderer = new ShapeRenderer(canvas.getContext("2d")!);
     this.existingShapes = [];
     this.roomId = roomId;
-    this.socket = socket;
+    this.connection = connection;
     this.clicked = false;
     this.theme = theme;
-    this.init();
-    this.initHandlers();
     this.initMouseHandlers();
+    // last: attach() can call load() immediately
+    this.connection.attach({
+      onMessage: (message) => this.receive(message),
+      onJoined: () => void this.load(),
+    });
   }
 
-  /** Detach the mouse listeners. The socket is closed by whoever opened it. */
+  /** Detaches listeners. The connection is closed by its owner. */
   destroy() {
+    this.destroyed = true;
+    this.connection.detach();
     this.canvas.removeEventListener("mousedown", this.mouseDownHandler);
     this.canvas.removeEventListener("wheel", this.wheelHandler);
     window.removeEventListener("keydown", this.spaceKeyHandler);
@@ -382,7 +424,10 @@ export class Game {
     this.canvas.removeEventListener("mousemove", this.mouseMoveHandler);
     this.canvas.removeEventListener("dblclick", this.dblClickHandler);
     window.removeEventListener("keydown", this.keyboardHandler)
-    if (this.animationFrame !== null) cancelAnimationFrame(this.animationFrame);
+    if (this.frame !== null) cancelAnimationFrame(this.frame);
+    if (this.strokeTimer) clearInterval(this.strokeTimer);
+    if (this.strokeSweep) clearTimeout(this.strokeSweep);
+    if (this.loadRetry) clearTimeout(this.loadRetry);
   }
 
   /* ══════════════════════════════════════════════════════════════════════
@@ -416,7 +461,7 @@ export class Game {
       this.cursor = null;
     }
     if (leavingSelect || (wasEraser && tool !== "eraser")) {
-      this.clearCanvas();
+      this.requestPaint();
     }
   }
 
@@ -472,7 +517,7 @@ export class Game {
   toggleGrid() {
     this.showGrid = !this.showGrid;
     this.onGridChange?.(this.showGrid);
-    this.clearCanvas();
+    this.requestPaint();
   }
 
   setOnContentVisibilityChange(cb: (visible: boolean) => void) {
@@ -562,7 +607,7 @@ export class Game {
     }
     this.camera = next;
     this.onCameraChange?.(next);
-    this.clearCanvas();
+    this.requestPaint();
   }
 
   /** Back to looking at the origin at actual size. */
@@ -665,11 +710,11 @@ export class Game {
       if (!response.ok) throw new Error(`storage returned ${response.status}`);
       const bitmap = await createImageBitmap(await response.blob());
       this.images.set(hash, bitmap);
-      this.clearCanvas();
+      this.requestPaint();
     } catch (err) {
       console.error("[canvas] could not load image", hash, err);
       this.images.set(hash, "failed");
-      this.clearCanvas();
+      this.requestPaint();
     }
   }
 
@@ -828,7 +873,7 @@ export class Game {
       this.selectedIds.add(id);
       this.canvas.style.cursor = "default";
       this.onToolChange?.("select");
-      this.clearCanvas();
+      this.requestPaint();
     } catch (err) {
       // Every step of the upload already knows why it failed; the only job
       // here is to not flatten that back into "something went wrong". The
@@ -844,22 +889,35 @@ export class Game {
   }
 
   /**
-   * Repaint from the shape list. The entry point for anything outside the
-   * drawing loop that invalidates the canvas: a theme change, or a resize -
-   * setting a canvas's width or height wipes its contents.
+   * Paints immediately. Only for resize (setting canvas size wipes it, so
+   * waiting a frame would flash) and theme changes. Otherwise use requestPaint().
    */
   repaint() {
-    this.clearCanvas();
+    if (this.frame !== null) {
+      cancelAnimationFrame(this.frame);
+      this.frame = null;
+    }
+    this.paint();
+  }
+
+  /** Schedules one paint on the next animation frame, however many times it's called. */
+  private requestPaint() {
+    if (this.frame !== null || this.destroyed) return;
+    this.frame = requestAnimationFrame(() => {
+      this.frame = null;
+      this.paint();
+    });
   }
 
   /**
    * Redraw the whole board: background, every saved shape in list order, then
-   * other people's in-flight strokes on top.
+   * other people's in-flight strokes, the selection, and the shape being
+   * drawn on top.
    *
    * List order is z-order, and the load query sorts by creation time, so newer
    * shapes cover older ones.
    */
-  clearCanvas() {
+  private paint() {
     // device coordinates: the wipe has to cover the canvas itself, not a
     // scrolled and scaled rectangle that used to
     this.renderer.clear(THEMES[this.theme].canvas);
@@ -885,6 +943,17 @@ export class Game {
 
     const now = performance.now();
 
+    // Expire finished appear animations here, not while painting a shape:
+    // off-screen shapes are skipped, so their entries would never expire and
+    // the repaint loop below would run forever.
+    for (const [id, appearedAt] of this.appearing) {
+      if (now - appearedAt >= APPEAR_MS || !this.shapeIds.has(id)) this.appearing.delete(id);
+    }
+
+    // visible area plus margin, in world coordinates
+    const view = visibleWorldBounds(this.screenSize(), this.camera);
+    const margin = this.px(CULL_MARGIN);
+
     // the shapes themselves, through the one dispatch the exporter also
     // uses - everything above and below this call is chrome, which is
     // exactly what an export leaves out
@@ -895,16 +964,19 @@ export class Game {
       placeholderColor: THEMES[this.theme].panelMuted,
       // the shape being edited is hidden while its overlay is open
       skipId: this.editingId,
+      // skip off-screen shapes
+      visible: {
+        left: view.left - margin,
+        top: view.top - margin,
+        right: view.right + margin,
+        bottom: view.bottom + margin,
+      },
       onMissingImage: (hash) => void this.ensureImage(hash),
       // a pad behind anything that just appeared, fading over APPEAR_MS
       highlightAlpha: (shape) => {
         const appearedAt = this.appearing.get(shape.id);
         if (appearedAt === undefined) return null;
         const progress = (now - appearedAt) / APPEAR_MS;
-        if (progress >= 1) {
-          this.appearing.delete(shape.id);
-          return null;
-        }
         // ease out: bright immediately, then away quickly
         return 0.28 * (1 - progress) * (1 - progress);
       },
@@ -916,19 +988,15 @@ export class Game {
     // the outline around the selected shape, over the shapes it frames but
     // under the eraser cursor
     if (this.selectedIds.size > 0) {
-      // collected first: deleting from a Set while iterating it is legal, but
-      // reads badly next to the drawing it is interleaved with
-      const gone: string[] = [];
-      for (const id of this.selectedIds) {
-        const selected = this.existingShapes.find((s) => s.id === id);
-        if (!selected) {
-          // erased here, cleared, or deleted by someone else. Dropping the id
-          // keeps every later reader - the Delete key, the drag handler - from
-          // aiming at a shape that no longer exists.
-          gone.push(id);
-          continue;
-        }
-        const b = boundsOf(selected);
+      // Drop selected ids whose shape is gone (erased, cleared, or deleted by
+      // someone else).
+      for (const id of [...this.selectedIds]) {
+        if (!this.shapeIds.has(id)) this.forgetShape(id);
+      }
+      // single pass instead of one search per selected shape
+      for (const shape of this.existingShapes) {
+        if (!this.selectedIds.has(shape.id)) continue;
+        const b = boundsOf(shape);
         this.renderer.selectionBox(
           b.left,
           b.top,
@@ -938,7 +1006,6 @@ export class Game {
           this.camera.zoom
         );
       }
-      for (const id of gone) this.forgetShape(id);
 
       // one set of grips for the whole selection, around the union of the
       // outlines above - a group resizes as a single object
@@ -971,12 +1038,8 @@ export class Game {
       );
     }
 
-    // ids that no longer match a shape would keep the animation loop alive
-    if (this.appearing.size > 0) {
-      for (const id of this.appearing.keys()) {
-        if (!this.shapeIds.has(id)) this.appearing.delete(id);
-      }
-    }
+    // in-progress shape, on top
+    this.paintPreview();
     } finally {
       // in a finally because a throw mid-paint would otherwise leave the
       // transform set, and every later frame would compound on top of it
@@ -987,6 +1050,34 @@ export class Game {
     // rather than in setCamera, because shapes arriving or leaving can lose
     // the board just as easily as scrolling away from it
     this.notifyContentVisibility();
+
+    // Keep painting while any shape is fading in; stops when the last expires.
+    if (this.appearing.size > 0) this.requestPaint();
+  }
+
+  /**
+   * Paints the shape being dragged out, using the same renderer calls and
+   * elbow router as the committed shape. Called inside paint() with the
+   * camera transform open.
+   */
+  private paintPreview() {
+    if (!this.clicked || !this.pointer) return;
+    const color = this.paintColor(this.currentColor);
+    const from = this.start;
+    const to = this.pointer;
+
+    if (this.selectedTool === "rect") {
+      this.renderer.rect(from.x, from.y, to.x - from.x, to.y - from.y, color);
+    } else if (this.selectedTool === "circle") {
+      const { centerX, centerY, radius } = circleFromDrag(from, to);
+      this.renderer.circle(centerX, centerY, radius, color);
+    } else if (this.selectedTool === "pencil" && this.currentStrokeId) {
+      this.renderer.stroke(this.currentStroke, color);
+    } else if (this.selectedTool === "line") {
+      this.renderer.polyline([from, to], color);
+    } else if (this.selectedTool === "arrow") {
+      this.renderer.arrow(elbowPoints(from, to), color);
+    }
   }
 
   /**
@@ -1002,21 +1093,60 @@ export class Game {
    * ══════════════════════════════════════════════════════════════════════ */
 
   /**
-   * Fetch the room's saved shapes and paint them.
+   * Fetches the saved board and replaces local state with it. Runs when the
+   * room is joined (first time and after each reconnect) and on `resync`.
    *
-   * Called un-awaited from the constructor, so it catches its own failures: an
-   * expired token or a sleeping backend would otherwise surface as an
-   * unhandled rejection and a canvas that stays blank with no explanation.
+   * Messages that arrive while the request is in flight wait in `backlog`
+   * and are applied on top of the snapshot; applying them to the old list
+   * and then overwriting it would drop new shapes and resurrect deleted
+   * ones. Our own unconfirmed changes are re-applied on top too. The server
+   * only sends "joined"/"resync" once earlier writes have landed, so nothing
+   * falls between the snapshot and the backlog.
    */
-  async init() {
+  private async load() {
+    const run = ++this.loadRun;
+    if (this.loadRetry) clearTimeout(this.loadRetry);
+    this.loadRetry = null;
+    this.loading = true;
+
+    let shapes: Shape[];
     try {
-      this.existingShapes = await getExistingShapes(this.roomId);
-      this.shapeIds = new Set(this.existingShapes.map((s) => s.id));
-      this.clearCanvas();
+      shapes = await getExistingShapes(this.roomId);
     } catch (err) {
+      if (run !== this.loadRun || this.destroyed) return;
+      if (err instanceof BoardGoneError) {
+        this.notify("This board no longer exists, or is no longer shared with you.");
+        this.connection.close();
+        return;
+      }
+      // e.g. expired token or sleeping backend: say so once, retry with backoff (max 15s)
       console.error("[canvas] could not load existing shapes:", err);
-      this.notify("Could not load this board. Reload to try again.");
+      if (this.loadFailures === 0) this.notify("Could not load this board. Retrying...");
+      const delay = Math.min(15_000, 1000 * 2 ** this.loadFailures++);
+      this.loadRetry = setTimeout(() => void this.load(), delay);
+      return;
     }
+    if (run !== this.loadRun || this.destroyed) return;
+    this.loadFailures = 0;
+
+    this.existingShapes = shapes;
+    this.shapeIds = new Set(shapes.map((s) => s.id));
+    this.remoteStrokes.clear();
+    // revert snapshots are obsolete; the database just answered
+    this.pendingUpdates.clear();
+
+    for (const message of this.connection.unsent()) this.applyRemote(message);
+    const backlog = this.backlog;
+    this.backlog = [];
+    this.loading = false;
+    for (const message of backlog) this.applyRemote(message);
+
+    if (this.connection.takeOverflow()) {
+      this.notify("You were offline for too long to keep everything - some changes were not saved.");
+    }
+    this.requestPaint();
+    // in sync with the server: send queued changes
+    this.connection.flush();
   }
 
   /* ══════════════════════════════════════════════════════════════════════
@@ -1024,150 +1154,166 @@ export class Game {
    * ══════════════════════════════════════════════════════════════════════ */
 
   /**
-   * Handle everything the server sends. Wrapped in try/catch because one
-   * malformed frame should cost a repaint, not the whole session.
+   * Entry point for server messages about this board. While loading they are
+   * held (see load()), except `resync` (which triggers a load) and `error`.
    */
-  initHandlers() {
-    this.socket.onmessage = (event) => {
-      try {
-        const message = JSON.parse(event.data);
-
-        if (message.type === "shape") {
-          const incomingShape = message.shape;
-          if (!incomingShape?.type || !incomingShape?.data) {
-            return;
-          }
-          const id: string | undefined = incomingShape.id ?? message.id;
-
-          // our own shape coming back (or a resend): we already have it, so
-          // adding it again would leave two copies of one shape in the array
-          if (!id || !this.shapeIds.has(id)) {
-            if (id) {
-              this.shapeIds.add(id);
-              this.markAppearing(id);
-            }
-            this.existingShapes.push({
-              id,
-              type: incomingShape.type,
-              ...incomingShape.data,
-            } as Shape);
-          }
-
-          // the finished shape replaces the live preview of the same stroke
-          if (message.strokeId) {
-            this.remoteStrokes.delete(message.strokeId);
-          }
-          this.clearCanvas();
-        } else if (message.type === "stroke_start") {
-          // someone started drawing: hold their points until the shape arrives
-          this.remoteStrokes.set(message.strokeId, {
-            color: message.color || "#ffffff",
-            points: [],
-          });
-        } else if (message.type === "stroke_point") {
-          const stroke = this.remoteStrokes.get(message.strokeId);
-          // a stroke we never saw start (we joined mid-draw): nothing to extend
-          if (stroke) {
-            stroke.points.push(message.point);
-            this.clearCanvas();
-          }
-        } 
-        else if(message.type === "update_shape") {
-          // Our own update, relayed back: the server stored it, so there is
-          // nothing left to revert. Ahead of the check below, so an
-          // intermediate send added later is still acknowledged rather than
-          // leaving a snapshot that outlives the drag.
-          this.pendingUpdates.delete(message.id);
-          // Someone else moving the shape under our cursor: both sides would
-          // be writing a position to the same entry many times a second, and
-          // it would visibly oscillate between the two. Theirs is dropped, so
-          // our release is the last write the server stores - last writer
-          // wins, not a merge.
-          if (
-            this.dragOriginals.has(message.id) ||
-            this.resizing?.originals.has(message.id)
-          ) {
-            return;
-          }
-          this.existingShapes = this.existingShapes.map((s) =>
-            s.id === message.id ? ({ ...s, ...message.data, id: s.id, type: s.type } as Shape) : s
-          );
-          this.clearCanvas();
-        }
-        else if (message.type === "update_shapes") {
-          // the plural form of the branch above: one gesture by someone else,
-          // arriving as one message
-          const updates: { id: string; data: Record<string, unknown> }[] =
-            Array.isArray(message.updates) ? message.updates : [];
-          const byId = new Map(updates.map((u) => [u.id, u.data]));
-          for (const id of byId.keys()) this.pendingUpdates.delete(id);
-
-          let touched = false;
-          this.existingShapes = this.existingShapes.map((sh) => {
-            const data = byId.get(sh.id);
-            // a shape we are dragging right now is left alone, same as the
-            // single-shape branch: both sides writing a position many times a
-            // second makes it visibly oscillate
-            if (!data || this.dragOriginals.has(sh.id) || this.resizing?.originals.has(sh.id)) {
-              return sh;
-            }
-            touched = true;
-            return { ...sh, ...data, id: sh.id, type: sh.type } as Shape;
-          });
-          if (touched) this.clearCanvas();
-        }
-        else if (message.type === "delete_shapes") {
-          const ids: string[] = Array.isArray(message.ids) ? message.ids : [];
-          if (ids.length > 0) {
-            const gone = new Set(ids);
-            this.existingShapes = this.existingShapes.filter((sh) => !gone.has(sh.id));
-            for (const id of ids) {
-              this.shapeIds.delete(id);
-              this.forgetShape(id);
-            }
-            this.clearCanvas();
-          }
-        }
-        else if(message.type === "delete_shape") {
-          this.existingShapes = this.existingShapes.filter((s) => s.id !== message.id);
-          this.shapeIds.delete(message.id);
-          // clearCanvas would drop a stale id from selectedIds on the next paint
-          // anyway; doing it here keeps the field honest from the moment the
-          // message lands, for anything that reads it in between - a Delete
-          // keypress in the same tick, say
-          this.forgetShape(message.id);
-          this.clearCanvas();
-        }
-        else if (message.type === "clear_room") {
-          this.existingShapes = [];
-          this.shapeIds.clear();
-          this.remoteStrokes.clear();
-          // the board is empty, so nothing can still be selected, dragged, or
-          // waiting to be reverted
-          this.selectedIds.clear();
-          this.dragOriginals.clear();
-          this.marquee = null;
-          this.resizing = null;
-          this.pendingUpdates.clear();
-          this.clearCanvas();
-        } else if (message.type === "error") {
-          // the server refused something - a board you do not own, a shape it
-          // could not save. The person needs to see this, not the console.
-          // a refused update names its shape, so the optimistic change can be
-          // undone rather than left to drift from the database
-          if (message.id) {
-            const previous = this.pendingUpdates.get(message.id);
-            if (previous) {
-              this.pendingUpdates.delete(message.id);
-              this.applyShape(previous);
-            }
-          }
-          this.notify(message.message ?? "The server refused that action");
-        }
-      } catch (err) {
-        console.error("[canvas] bad message from server:", err);
+  private receive(message: ServerMessage) {
+    if (message.type === "resync") {
+      void this.load();
+      return;
+    }
+    if (this.loading && message.type !== "error") {
+      if (this.backlog.length >= MAX_BACKLOG) {
+        // far more than a load should need to hold; reload, as these are stored by now
+        this.backlog = [];
+        void this.load();
+        return;
       }
-    };
+      this.backlog.push(message);
+      return;
+    }
+    this.applyRemote(message);
+  }
+
+  /**
+   * Applies one change to the board: another user's change, the echo of our
+   * own, or (after a reload) our own unsent changes re-applied. Every branch
+   * is idempotent. A bad frame is caught so it can't end the session.
+   */
+  private applyRemote(message: ServerMessage | OutgoingMessage) {
+    try {
+      if (message.type === "shape") {
+        const incoming = message.shape as { id?: string; type?: string; data?: object } | undefined;
+        const id = (message.id ?? incoming?.id) as string | undefined;
+        if (!incoming?.type || !incoming.data || !id) return;
+
+        // ignore our own echo or a resend, to avoid duplicates
+        if (!this.shapeIds.has(id)) {
+          const shape = { ...incoming.data, id, type: incoming.type };
+          // the server validates, but never let an undrawable shape into the
+          // list, where it would throw on every frame
+          if (!isDrawable(shape)) return;
+          this.shapeIds.add(id);
+          this.markAppearing(id);
+          this.existingShapes.push(shape);
+        }
+
+        // the finished shape replaces its live preview
+        if (message.strokeId) {
+          this.remoteStrokes.delete(message.strokeId as string);
+        }
+        this.requestPaint();
+      } else if (message.type === "stroke_start") {
+        // someone started drawing: hold their points until the shape arrives
+        if (this.remoteStrokes.size < 200) {
+          this.remoteStrokes.set(message.strokeId as string, {
+            color: typeof message.color === "string" ? message.color : DEFAULT_COLOR,
+            points: [],
+            seenAt: performance.now(),
+          });
+          this.scheduleStrokeSweep();
+        }
+      } else if (message.type === "stroke_points") {
+        const stroke = this.remoteStrokes.get(message.strokeId as string);
+        const points = message.points;
+        // a stroke we never saw start (we joined mid-draw): nothing to extend
+        if (stroke && Array.isArray(points) && stroke.points.length + points.length <= MAX_POINTS) {
+          for (const p of points as Point[]) {
+            if (Number.isFinite(p?.x) && Number.isFinite(p?.y)) stroke.points.push({ x: p.x, y: p.y });
+          }
+          stroke.seenAt = performance.now();
+          this.requestPaint();
+        }
+      }
+      else if (message.type === "update_shape" || message.type === "update_shapes") {
+        // one gesture: a single shape or a whole selection
+        const updates = (
+          message.type === "update_shape" ? [message.update] : message.updates
+        ) as { id: string; data: Record<string, unknown> }[] | undefined;
+        if (!Array.isArray(updates)) return;
+        const byId = new Map(updates.filter(Boolean).map((u) => [u.id, u.data]));
+        // Our own update, relayed back: the server has it, so there is
+        // nothing left to revert. Ahead of the check below, so an
+        // intermediate send added later is still acknowledged rather than
+        // leaving a snapshot that outlives the drag.
+        for (const id of byId.keys()) this.pendingUpdates.delete(id);
+
+        let touched = false;
+        for (let i = 0; i < this.existingShapes.length; i++) {
+          const current = this.existingShapes[i]!;
+          const data = byId.get(current.id);
+          // Someone else moving a shape under our cursor: both sides would
+          // be writing a position to the same entry many times a second,
+          // and it would visibly oscillate between the two. Theirs is
+          // dropped, so our release is the last write the server stores -
+          // last writer wins, not a merge.
+          if (!data || this.dragOriginals.has(current.id) || this.resizing?.originals.has(current.id)) {
+            continue;
+          }
+          const next = { ...current, ...data, id: current.id, type: current.type };
+          // skip geometry that doesn't fit the shape's type
+          if (!isDrawable(next)) continue;
+          this.existingShapes[i] = next;
+          touched = true;
+        }
+        if (touched) this.requestPaint();
+      }
+      else if (message.type === "delete_shape" || message.type === "delete_shapes") {
+        const ids = (message.type === "delete_shape" ? [message.id] : message.ids) as string[] | undefined;
+        if (!Array.isArray(ids) || ids.length === 0) return;
+        const gone = new Set(ids);
+        this.existingShapes = this.existingShapes.filter((sh) => !gone.has(sh.id));
+        for (const id of ids) {
+          this.shapeIds.delete(id);
+          // clear stale selection now, for anything reading it before the next paint
+          this.forgetShape(id);
+        }
+        this.requestPaint();
+      }
+      else if (message.type === "clear_room") {
+        this.existingShapes = [];
+        this.shapeIds.clear();
+        this.remoteStrokes.clear();
+        // empty board: nothing left to select, drag or revert
+        this.selectedIds.clear();
+        this.dragOriginals.clear();
+        this.marquee = null;
+        this.resizing = null;
+        this.pendingUpdates.clear();
+        this.requestPaint();
+      } else if (message.type === "error") {
+        // Server refused something. Show it to the user, and if it names a
+        // shape, undo our optimistic change.
+        if (typeof message.id === "string") {
+          const previous = this.pendingUpdates.get(message.id);
+          if (previous) {
+            this.pendingUpdates.delete(message.id);
+            this.applyShape(previous);
+          }
+        }
+        this.notify(typeof message.message === "string" ? message.message : "The server refused that action");
+      }
+    } catch (err) {
+      console.error("[canvas] bad message from server:", err);
+    }
+  }
+
+  /**
+   * Drops live strokes that stopped receiving points (author disconnected
+   * before finishing), which would otherwise stay until reload. The timer
+   * only runs while strokes exist.
+   */
+  private scheduleStrokeSweep() {
+    if (this.strokeSweep !== null) return;
+    this.strokeSweep = setTimeout(() => {
+      this.strokeSweep = null;
+      const now = performance.now();
+      for (const [id, stroke] of this.remoteStrokes) {
+        if (now - stroke.seenAt > REMOTE_STROKE_TTL_MS) this.remoteStrokes.delete(id);
+      }
+      this.requestPaint();
+      if (this.remoteStrokes.size > 0) this.scheduleStrokeSweep();
+    }, REMOTE_STROKE_TTL_MS);
   }
 
   /* ══════════════════════════════════════════════════════════════════════
@@ -1175,11 +1321,11 @@ export class Game {
    * ══════════════════════════════════════════════════════════════════════ */
 
   /**
-   * Every outgoing message goes through here - one place to add a readyState
-   * guard, buffering or logging when the time comes.
+   * All outgoing messages go through here to the connection, which sends or
+   * queues them, so nothing else cares whether the socket is up.
    */
-  private send(payload: Record<string, unknown>) {
-    this.socket.send(JSON.stringify(payload));
+  private send(payload: OutgoingMessage) {
+    this.connection.send(payload);
   }
 
   /** Wipe the room for everyone. The server deletes the rows and broadcasts. */
@@ -1209,7 +1355,7 @@ export class Game {
     // paint it now rather than waiting for the server to echo it back: text
     // would otherwise disappear with its editor and reappear a round trip
     // later. Drag tools hide this because their preview already drew it.
-    this.clearCanvas();
+    this.requestPaint();
     // id and type travel at the top level: they are identity, not geometry, so
     // they stay out of the JSON column that `data` becomes
     const { type, id, ...data } = shape;
@@ -1246,20 +1392,28 @@ export class Game {
 
   private applyShape(shape: Shape): boolean {
     const replaced = this.replaceShape(shape);
-    if (replaced) this.clearCanvas();
+    if (replaced) this.requestPaint();
     return replaced;
   }
 
   /**
    * The same, for a whole selection: one repaint at the end rather than one
    * per shape, so dragging twenty shapes costs the same frame as dragging one.
+   *
+   * One pass over the board; searching per shape made group drags
+   * O(selection x board).
    */
   private applyShapes(shapes: Shape[]) {
+    const byId = new Map(shapes.map((shape) => [shape.id, shape]));
     let any = false;
-    for (const shape of shapes) {
-      if (this.replaceShape(shape)) any = true;
+    for (let i = 0; i < this.existingShapes.length; i++) {
+      const next = byId.get(this.existingShapes[i]!.id);
+      if (next) {
+        this.existingShapes[i] = next;
+        any = true;
+      }
     }
-    if (any) this.clearCanvas();
+    if (any) this.requestPaint();
   }
 
   /** Replace a shape everywhere: locally, for everyone else, and in the database. */
@@ -1277,13 +1431,13 @@ export class Game {
     if (previous && !this.pendingUpdates.has(shape.id)) {
       this.pendingUpdates.set(shape.id, previous);
     }
+    // type travels with the geometry so the server can validate one against the other
     const { type, id, ...data } = shape;
     this.send({
-      type:"update_shape", 
-      id, 
-      data,
+      type: "update_shape",
       roomId: this.roomId,
-    }) 
+      update: { id, shapeType: type, data },
+    })
   }
   /**
    * Replace many shapes at once: locally, for everyone else, and in the
@@ -1297,44 +1451,57 @@ export class Game {
    * statement.
    */
   updateShapes(unrounded: Shape[]) {
-    const shapes = unrounded.map(roundShape);
+    const wanted = new Map(unrounded.map((shape) => [shape.id, roundShape(shape)]));
     const applied: Shape[] = [];
 
-    for (const shape of shapes) {
-      const previous = this.existingShapes.find((s) => s.id === shape.id);
-      if (!this.replaceShape(shape)) continue;
+    for (let i = 0; i < this.existingShapes.length; i++) {
+      const current = this.existingShapes[i]!;
+      const next = wanted.get(current.id);
+      if (!next) continue;
       // the version from before this burst, so a refusal can be undone
-      if (previous && !this.pendingUpdates.has(shape.id)) {
-        this.pendingUpdates.set(shape.id, previous);
-      }
-      applied.push(shape);
+      if (!this.pendingUpdates.has(current.id)) this.pendingUpdates.set(current.id, current);
+      this.existingShapes[i] = next;
+      applied.push(next);
     }
     if (applied.length === 0) return;
 
     // one repaint for the whole set, not one per shape
-    this.clearCanvas();
-    this.send({
-      type: "update_shapes",
-      updates: applied.map(({ type, id, ...data }) => ({ id, data })),
-      roomId: this.roomId,
-    });
+    this.requestPaint();
+
+    // one message per gesture, split only if it would exceed the server's limit
+    let batch: { id: string; shapeType: string; data: object }[] = [];
+    let size = 0;
+    const sendBatch = () => {
+      if (batch.length > 0) this.send({ type: "update_shapes", roomId: this.roomId, updates: batch });
+      batch = [];
+      size = 0;
+    };
+    for (const { type, id, ...data } of applied) {
+      const update = { id, shapeType: type, data };
+      const length = JSON.stringify(update).length;
+      if (batch.length >= MAX_BATCH || size + length > MAX_BATCH_CHARS) sendBatch();
+      batch.push(update);
+      size += length;
+    }
+    sendBatch();
   }
 
-  /** Delete many shapes at once, in one message. */
+  /** Deletes many shapes in one message (split past the batch cap). */
   deleteShapes(ids: string[]) {
-    const removed: string[] = [];
-    for (const id of ids) {
-      const index = this.existingShapes.findIndex((s) => s.id === id);
-      if (index === -1) continue;
-      this.existingShapes.splice(index, 1);
+    const gone = new Set(ids.filter((id) => this.shapeIds.has(id)));
+    if (gone.size === 0) return;
+
+    this.existingShapes = this.existingShapes.filter((shape) => !gone.has(shape.id));
+    for (const id of gone) {
       this.shapeIds.delete(id);
       this.forgetShape(id);
-      removed.push(id);
     }
-    if (removed.length === 0) return;
+    this.requestPaint();
 
-    this.clearCanvas();
-    this.send({ type: "delete_shapes", ids: removed, roomId: this.roomId });
+    const removed = [...gone];
+    for (let i = 0; i < removed.length; i += MAX_BATCH) {
+      this.send({ type: "delete_shapes", ids: removed.slice(i, i + MAX_BATCH), roomId: this.roomId });
+    }
   }
 
   /**
@@ -1424,7 +1591,7 @@ export class Game {
     this.shapeIds.delete(id)
     // covers the eraser and an emptied text box too, not just the Delete key
     this.forgetShape(id);
-    this.clearCanvas();
+    this.requestPaint();
     this.send({
       type:"delete_shape", 
       id,
@@ -1459,7 +1626,7 @@ export class Game {
   }
   endTextEdit() {
     this.editingId = null;
-    this.clearCanvas();
+    this.requestPaint();
   }
 
   /**
@@ -1608,23 +1775,28 @@ export class Game {
    */
   private markAppearing(id: string) {
     this.appearing.set(id, performance.now());
-    this.runAppearAnimation();
+    // paint() keeps repainting while anything is fading in
+    this.requestPaint();
   }
 
-  /**
-   * Repaint on every frame while any shape is still fading in, then stop.
-   *
-   * Immediate-mode rendering means nothing animates on its own: each frame has
-   * to be drawn. The loop ends as soon as the last animation expires, so an
-   * idle board costs nothing.
-   */
-  private runAppearAnimation() {
-    if (this.animationFrame !== null) return;
-    this.animationFrame = requestAnimationFrame(() => {
-      this.animationFrame = null;
-      this.clearCanvas();
-      if (this.appearing.size > 0) this.runAppearAnimation();
+  /** Sends points collected since the last send as one message. */
+  private sendStrokePoints() {
+    if (!this.currentStrokeId || this.strokeOutbox.length === 0) return;
+    this.send({
+      type: "stroke_points",
+      strokeId: this.currentStrokeId,
+      points: this.strokeOutbox.splice(0, MAX_STROKE_POINTS),
+      roomId: this.roomId,
     });
+  }
+
+  /** Pencil up: stop sending and reset stroke state. */
+  private endStroke() {
+    if (this.strokeTimer) clearInterval(this.strokeTimer);
+    this.strokeTimer = null;
+    this.strokeOutbox = [];
+    this.currentStroke = [];
+    this.currentStrokeId = null;
   }
 
   /**
@@ -1659,6 +1831,8 @@ export class Game {
 
     this.clicked = true;
     this.start = this.pointOf(e);
+    // preview runs from start to pointer; same point until the first move
+    this.pointer = this.start;
     // text is placed by a double click - see dblClickHandler. Opening the
     // editor from mousedown as well would unmount the one already being typed
     // in (the key changes), so the text would be discarded on the very click
@@ -1699,7 +1873,7 @@ export class Game {
           anchor: { x: opposite.x, y: opposite.y },
           bounds: selectionBox,
         };
-        this.clearCanvas();
+        this.requestPaint();
         return;
       }
 
@@ -1738,9 +1912,10 @@ export class Game {
         }
         this.beginDrag();
       }
-      this.clearCanvas();
+      this.requestPaint();
     }
     else if (this.selectedTool === "pencil") {
+      this.endStroke();
       this.currentStrokeId = newId();
       this.currentStroke = [this.pointOf(e)];
       this.send({
@@ -1749,6 +1924,9 @@ export class Game {
         color: this.currentColor,
         roomId: this.roomId,
       });
+      // Send points in batches on a timer instead of per mouse move (fast
+      // mice report 100+/s; ~30 frames/s looks identical).
+      this.strokeTimer = setInterval(() => this.sendStrokePoints(), STROKE_SEND_MS);
     }
   };
 
@@ -1770,7 +1948,7 @@ export class Game {
       const hit = hitTest(texts, at, 4);
       if (hit && hit.type === "text") {
         this.editingId = hit.id;
-        this.clearCanvas();                           // hide it while the editor is open
+        this.requestPaint();                           // hide it while the editor is open
         this.onTextRequest?.({ at: { x: hit.x, y: hit.y }, shape: hit });
       } else {
         this.onTextRequest?.({ at });
@@ -1797,7 +1975,7 @@ export class Game {
     this.selectedIds.add(hit.id);
     this.canvas.style.cursor = "default";
     this.onToolChange?.("select");
-    this.clearCanvas();
+    this.requestPaint();
   };
 
   /**
@@ -1829,6 +2007,8 @@ export class Game {
     this.marquee = null;
     this.resizing = null;
     if (!wasClicked) return;
+    // always clear the drag preview
+    this.requestPaint();
 
     if (this.selectedTool === "select") {
       if (resizing) {
@@ -1853,7 +2033,7 @@ export class Game {
         for (const shape of shapesInBounds(this.existingShapes, area)) {
           this.selectedIds.add(shape.id);
         }
-        this.clearCanvas();
+        this.requestPaint();
         return;
       }
 
@@ -1907,14 +2087,21 @@ export class Game {
     } else if (selectedTool === "pencil") {
       // a tap, not a stroke: drop it and leave nothing behind
       if (this.currentStroke.length < 2) {
-        this.currentStroke = [];
-        this.currentStrokeId = null;
+        this.endStroke();
         return;
+      }
+      // Drop redundant points. Half-pixel tolerance keeps the same pixels;
+      // it's loosened only if the stroke would exceed the server's point cap.
+      let tolerance = this.px(0.5);
+      let points = simplifyStroke(this.currentStroke, tolerance);
+      while (points.length > MAX_POINTS) {
+        tolerance *= 2;
+        points = simplifyStroke(this.currentStroke, tolerance);
       }
       shape = {
         id,
         type: "pencil",
-        points: this.currentStroke,
+        points,
         color: this.currentColor,
       };
     } else if (selectedTool === "line") {
@@ -1939,6 +2126,7 @@ export class Game {
     }
 
     if (!shape) {
+      this.endStroke();
       return;
     }
 
@@ -1947,28 +2135,20 @@ export class Game {
     // above everything drawn before it, swallowing clicks at that point.
     // Dropping it silently is right - the person did not mean to draw.
     if (isDegenerate(shape, this.px(MIN_SIZE))) {
-      this.currentStroke = [];
-      this.currentStrokeId = null;
+      this.endStroke();
       return;
     }
 
+    // before endStroke: the commit carries the stroke id so receivers swap preview for shape
     this.commitShape(shape);
-
-    // reset pencil state after commit
-    this.currentStroke = [];
-    this.currentStrokeId = null;
+    this.endStroke();
   };
 
   /**
-   * Draw the shape as it is being dragged.
-   *
-   * Every move repaints the whole board and then draws the in-progress shape
-   * on top - nothing is retained. The preview calls the same renderer methods,
-   * and the same elbow router, as the committed shape, so the two cannot
-   * disagree about what is being drawn.
-   *
-   * Only the pencil sends anything here; the other tools stay local until
-   * mouseup, so other people see them appear on release.
+   * Handles pan, hover, drag, resize, erase and draw. Nothing is painted
+   * here: branches update state and call requestPaint(), and paint() draws
+   * the in-progress shape from `pointer`. Only the pencil sends anything;
+   * the other tools stay local until mouseup.
    */
   mouseMoveHandler = (e: MouseEvent) => {
     // a pan in progress owns the gesture; nothing else should react
@@ -1986,11 +2166,15 @@ export class Game {
       return;
     }
 
+    // computed once per event
+    const at = this.pointOf(e);
+    this.pointer = at;
+
     // the eraser draws its reach under the cursor, so it needs the position on
     // every move - not only while the button is held
     if (this.selectedTool === "eraser") {
-      this.cursor = this.pointOf(e);
-      if (!this.clicked) this.clearCanvas();
+      this.cursor = at;
+      if (!this.clicked) this.requestPaint();
     }
 
     // with the select tool, the cursor is the only hint that a shape can be
@@ -2006,7 +2190,6 @@ export class Game {
           // read from where the cursor is now, not from the corner that was
           // grabbed: dragging through the anchor turns an se grip into a sw
           // one, and the arrow has to turn with it
-          const at = this.pointOf(e);
           const dx = at.x - this.resizing.anchor.x;
           const dy = at.y - this.resizing.anchor.y;
           this.canvas.style.cursor =
@@ -2014,28 +2197,31 @@ export class Game {
         }
       } else if (this.dragOriginals.size > 0) {
         this.canvas.style.cursor = "grabbing";
-      } else if (this.hoveredHandle(this.pointOf(e))) {
-        const corner = this.hoveredHandle(this.pointOf(e))!;
-        // the line the grip travels along: a diagonal for a corner, a single
-        // axis for an edge
-        this.canvas.style.cursor = RESIZE_CURSOR[corner];
       } else {
-        const over =
-          hitTest(this.existingShapes, this.pointOf(e), this.px(SELECT_TOLERANCE)) ??
-          hitTestInside(this.existingShapes, this.pointOf(e));
-        this.canvas.style.cursor =
-          over || this.pointInSelection(this.pointOf(e)) ? "grab" : "default";
+        const corner = this.hoveredHandle(at);
+        if (corner) {
+          // diagonal cursor for corner grips, single-axis for edges
+          this.canvas.style.cursor = RESIZE_CURSOR[corner];
+        } else {
+          const over =
+            hitTest(this.existingShapes, at, this.px(SELECT_TOLERANCE)) ??
+            hitTestInside(this.existingShapes, at);
+          this.canvas.style.cursor =
+            over || this.pointInSelection(at) ? "grab" : "default";
+        }
       }
     }
 
+    if (!this.clicked) return;
+
     // a resize in progress: the anchor is fixed and the cursor is the corner
     // being dragged, so the two define the new box
-    if (this.clicked && this.resizing) {
+    if (this.resizing) {
       const { originals, corner, anchor, bounds } = this.resizing;
       // one pair of factors for the whole selection, from the box as it was at
       // mousedown - computing them from the shrinking box each frame would
       // compound, and the shapes would run away from the cursor
-      const { sx, sy, uniform } = scaleFactors(bounds, corner, anchor, this.pointOf(e));
+      const { sx, sy, uniform } = scaleFactors(bounds, corner, anchor, at);
       const resized: Shape[] = [];
       for (const original of originals.values()) {
         resized.push(scale(original, anchor, sx, sy, uniform));
@@ -2047,10 +2233,9 @@ export class Game {
 
     // a drag in progress: recompute every position from the originals and the
     // total offset since mousedown, never from the offset since the last move
-    if (this.clicked && this.dragOriginals.size > 0) {
-      const cursor = this.pointOf(e);
-      const dx = cursor.x - this.start.x;
-      const dy = cursor.y - this.start.y;
+    if (this.dragOriginals.size > 0) {
+      const dx = at.x - this.start.x;
+      const dy = at.y - this.start.y;
       // local only - the moves go out once, on mouseup
       const moved: Shape[] = [];
       for (const original of this.dragOriginals.values()) {
@@ -2061,82 +2246,33 @@ export class Game {
     }
 
     // sweeping an area: only the band itself changes, the shapes do not
-    if (this.clicked && this.marquee) {
-      this.marquee = { from: this.marquee.from, to: this.pointOf(e) };
-      this.clearCanvas();
+    if (this.marquee) {
+      this.marquee = { from: this.marquee.from, to: at };
+      this.requestPaint();
       return;
     }
 
-    if (this.clicked) {
-      const here = this.pointOf(e);
-      const width = here.x - this.start.x;
-      const height = here.y - this.start.y;
-      this.clearCanvas();
-      const color = this.paintColor(this.currentColor);
-      const selectedTool = this.selectedTool;
-
-      // The preview is board content, so it has to be painted in the same
-      // space as the board. clearCanvas opens the camera transform and closes
-      // it again, so by here we are back in device coordinates - drawing
-      // world values straight onto that put the preview wherever those
-      // numbers happened to land in screen pixels. At the identity camera
-      // that is the right place, which is exactly why this survived until
-      // somebody zoomed out.
-      this.renderer.beginWorld(
-        this.camera.scrollX,
-        this.camera.scrollY,
-        this.camera.zoom,
-        this.deviceRatio()
-      );
-      try {
-
-      if (selectedTool === "rect") {
-        this.renderer.rect(this.start.x, this.start.y, width, height, color);
-      } else if (selectedTool === "circle") {
-        const { centerX, centerY, radius } = circleFromDrag(
-          this.dragStart(),
-          this.pointOf(e)
-        );
-        this.renderer.circle(centerX, centerY, radius, color);
-      }
-      else if(selectedTool === "eraser") {
-        // Sample along the path the cursor took since the last event, not just
-        // where it is now: mouse events arrive every 8-16ms, so a fast swipe
-        // jumps 40px or more and thin shapes would slip through the gaps.
-        const from = this.lastErasePoint ?? this.dragStart();
-        const to = this.pointOf(e);
-        const steps = Math.max(1, Math.ceil(Math.hypot(to.x - from.x, to.y - from.y) / 4));
-        for (let s = 1; s <= steps; s++) {
-          const t = s / steps;
-          this.eraseAt({
-            x: from.x + (to.x - from.x) * t,
-            y: from.y + (to.y - from.y) * t,
-          });
-        }
-        this.lastErasePoint = to;
-      } else if (selectedTool === "pencil" && this.currentStrokeId) {
-        const point = this.pointOf(e);
-        this.currentStroke.push(point);
-        this.send({
-          type: "stroke_point",
-          strokeId: this.currentStrokeId,
-          point,
-          roomId: this.roomId,
+    if (this.selectedTool === "eraser") {
+      // Sample along the cursor's path since the last event: a fast swipe
+      // jumps 40px+ and would skip thin shapes.
+      const from = this.lastErasePoint ?? this.dragStart();
+      const steps = Math.max(1, Math.ceil(Math.hypot(at.x - from.x, at.y - from.y) / 4));
+      for (let step = 1; step <= steps; step++) {
+        const t = step / steps;
+        this.eraseAt({
+          x: from.x + (at.x - from.x) * t,
+          y: from.y + (at.y - from.y) * t,
         });
-        this.renderer.stroke(this.currentStroke, color);
-      } else if (selectedTool === "line") {
-        this.renderer.polyline([this.dragStart(), this.pointOf(e)], color);
-      } else if (selectedTool === "arrow") {
-        this.renderer.arrow(
-          elbowPoints(this.dragStart(), this.pointOf(e)),
-          color
-        );
       }
-
-      } finally {
-        this.renderer.endWorld();
-      }
+      this.lastErasePoint = at;
+    } else if (this.selectedTool === "pencil" && this.currentStrokeId) {
+      this.currentStroke.push(at);
+      // sent by the timer started on mousedown
+      this.strokeOutbox.push(at);
     }
+
+    // paint() draws the in-progress shape from `pointer`
+    this.requestPaint();
   };
   /**
    * Board shortcuts. Listens on window, because a canvas cannot take focus and

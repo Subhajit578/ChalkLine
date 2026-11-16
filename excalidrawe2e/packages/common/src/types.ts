@@ -1,9 +1,26 @@
 import {z} from "zod";
 
+/**
+ * Username: letters, digits, dot, dash, underscore. "@" is excluded so a
+ * username can never equal someone's email (sign-in accepts either).
+ */
+const Username = z
+    .string()
+    .trim()
+    .min(3, "Username must be at least 3 characters")
+    .max(20, "Username must be at most 20 characters")
+    .regex(/^[A-Za-z0-9._-]+$/, "Username can only use letters, numbers, dots, dashes and underscores")
+
+/** Trimmed and lowercased, so differing case doesn't create two accounts. */
+const Email = z.string().trim().toLowerCase().max(254).email("Enter a valid email address")
+
+/** New password. The max is only because bcrypt ignores everything past 72 bytes. */
+const NewPassword = z.string().min(8, "Use at least 8 characters").max(200, "Use at most 200 characters")
+
 export const CreateUserSchema = z.object({
-    email: z.string(),
-    username: z.string().min(3).max(20),
-    password: z.string()
+    email: Email,
+    username: Username,
+    password: NewPassword,
 })
 /**
  * Signing in.
@@ -15,20 +32,31 @@ export const CreateUserSchema = z.object({
  * `email` is still accepted so that any client not yet updated keeps working.
  */
 export const SigninUserSchema = z.object({
-    identifier: z.string().min(3).max(64).optional(),
-    email: z.string().min(3).optional(),
-    password: z.string()
+    identifier: z.string().min(3).max(254).optional(),
+    email: z.string().min(3).max(254).optional(),
+    // no minimum: older accounts predate the 8-character rule
+    password: z.string().min(1).max(200)
 }).refine((d) => Boolean(d.identifier || d.email), {
     message: "A username or email is required",
 })
 
 /** Turning a guest into a real account: the credentials it never had. */
 export const ClaimAccountSchema = z.object({
-    email: z.string().email(),
-    password: z.string().min(8, "Use at least 8 characters"),
+    email: Email,
+    password: NewPassword,
 })
+
+/**
+ * Canvas name (create and rename). Display only; the link is the shareId.
+ * Characters that break URL paths are excluded because old name links still resolve.
+ */
 export const CreateRoomSchema = z.object({
-   slug : z.string().min(3).max(20)
+   slug : z
+       .string()
+       .trim()
+       .min(3, "Use at least 3 characters")
+       .max(20, "Use at most 20 characters")
+       .regex(/^[^/\\?#%\u0000-\u001f]+$/, "Names cannot contain / \\ ? # or %")
 })
 
 /**
@@ -45,7 +73,7 @@ export const ALLOWED_IMAGE_TYPES = [
     "image/jpeg",
     "image/webp",
     "image/gif",
-];
+] as const;
 
 /**
  * Largest upload accepted, in bytes.
@@ -66,10 +94,7 @@ export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
  */
 export const PresignUploadSchema = z.object({
     hash: z.string().regex(/^[a-f0-9]{64}$/, "hash must be a lowercase hex sha-256"),
-    // literals inline rather than z.enum(ALLOWED_IMAGE_TYPES): this file is
-    // loaded as source at runtime, so it has to stay valid JavaScript, and the
-    // `as const` that z.enum would need is TypeScript-only syntax
-    mimeType: z.enum(["image/png", "image/jpeg", "image/webp", "image/gif"]),
+    mimeType: z.enum(ALLOWED_IMAGE_TYPES),
     size: z.number().int().positive().max(MAX_IMAGE_BYTES),
     width: z.number().int().positive().max(20000),
     height: z.number().int().positive().max(20000),

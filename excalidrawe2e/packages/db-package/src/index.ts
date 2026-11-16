@@ -15,17 +15,9 @@ import { createGuard } from "@repo/backend-common/resilience";
  * Applied as a client extension rather than at the call sites: there are
  * dozens of those across two services, and one of them forgetting the
  * wrapper is exactly the hole this is meant to close.
- *
- * NOTE: this file is exported as raw source and `require()`d by the compiled
- * backends, so Node parses it directly and will not strip type annotations.
- * Keep it valid JavaScript - types go in JSDoc, as below.
  */
 
-// Tunables, read once. Written out rather than looped through a helper:
-// this file is parsed by Node as-is, so it cannot carry type annotations,
-// and TypeScript ignores JSDoc types in a .ts file - so a parameterised
-// helper here is either untyped or unparseable. Five explicit lines are
-// neither.
+// Tunables (env overrides).
 const TIMEOUT_MS = Number(process.env.DB_TIMEOUT_MS) > 0 ? Number(process.env.DB_TIMEOUT_MS) : 8000;
 const CONCURRENCY = Number(process.env.DB_CONCURRENCY) > 0 ? Number(process.env.DB_CONCURRENCY) : 10;
 const QUEUE_LIMIT = Number(process.env.DB_QUEUE_LIMIT) > 0 ? Number(process.env.DB_QUEUE_LIMIT) : 50;

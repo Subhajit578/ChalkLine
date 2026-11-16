@@ -1,4 +1,3 @@
-import { Shape } from "./Game";
 import { Handle } from "./hitTest";
 export type Point = { x: number; y: number };
 
@@ -424,9 +423,9 @@ export class ShapeRenderer {
     this.ctx.strokeStyle = color;
     this.ctx.lineWidth = this.strokeWidth(1);
     this.ctx.beginPath();
-    var dx = pointTo.x - pointFrom.x;
-    var dy = pointTo.y - pointFrom.y; 
-    var angle = Math.atan2(dy, dx);
+    const dx = pointTo.x - pointFrom.x;
+    const dy = pointTo.y - pointFrom.y;
+    const angle = Math.atan2(dy, dx);
     // floored so an arrow still reads as an arrow when zoomed out: at the
     // 10% floor a fixed 10 units is 1 screen pixel, which is nothing
     const headlen = this.atLeastOnScreen(10, 8);

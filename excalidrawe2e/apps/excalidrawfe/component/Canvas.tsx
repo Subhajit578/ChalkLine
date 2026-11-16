@@ -27,11 +27,8 @@ import TextOverlay from "./TextOverlay";
 import { makeNotice, ToastStack, type Notice } from "./Toast";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { saveBoardAsPdf } from "@/lib/pdf";
-import {
-  DEFAULT_FONT_FAMILY,
-  DEFAULT_FONT_SIZE,
-  type Point,
-} from "@/draw/renderer";
+import { DEFAULT_FONT_FAMILY, DEFAULT_FONT_SIZE } from "@/draw/renderer";
+import type { ConnectionStatus, RoomConnection } from "@/draw/connection";
 import { useTheme } from "./ThemeProvider";
 import { IDENTITY_CAMERA, type Camera } from "@/draw/camera";
 import {
@@ -47,12 +44,17 @@ export type Tool = "circle" | "rect" | "pencil" | "line" | "arrow" | "text" | "e
 export function Canvas({
   roomId,
   slug,
-  socket,
+  connection,
+  connectionStatus,
+  connectionMessage,
 }: {
   roomId: string;
   /** the canvas's name, used for the exported filename */
   slug: string;
-  socket: WebSocket;
+  /** socket to this board; RoomCanvas owns and closes it */
+  connection: RoomConnection;
+  connectionStatus: ConnectionStatus;
+  connectionMessage?: string;
 }) {
   const [size, setSize] = useState({ w: 0, h: 0 });
   /**
@@ -95,6 +97,35 @@ export function Canvas({
   }, []);
   const { theme, choice, cycle } = useTheme();
   const palette = THEMES[theme];
+
+  // Connection status as a notice that stays while it's true. Drawing
+  // continues offline (changes are queued), but the user must know not to
+  // close the tab.
+  const connectionNotice = useRef<string | null>(null);
+  useEffect(() => {
+    const raise = (message: string) => {
+      const notice = makeNotice(message, "error", true);
+      connectionNotice.current = notice.id;
+      setNotices((current) => [...current, notice]);
+    };
+    const lower = () => {
+      if (!connectionNotice.current) return false;
+      dismissNotice(connectionNotice.current);
+      connectionNotice.current = null;
+      return true;
+    };
+
+    if (connectionStatus === "reconnecting") {
+      if (!connectionNotice.current) {
+        raise("Connection lost - reconnecting. Keep this tab open: your changes are saved once you are back online.");
+      }
+    } else if (connectionStatus === "closed") {
+      lower();
+      raise(connectionMessage ?? "Disconnected from this board. Reload to try again.");
+    } else if (connectionStatus === "online" && lower()) {
+      showNotice("Back online", "success");
+    }
+  }, [connectionStatus, connectionMessage, dismissNotice, showNotice]);
 
   useEffect(() => {
     game?.setTool(selectedTool);
@@ -250,12 +281,12 @@ export function Canvas({
 
   useEffect(() => {
     if (!canvasRef.current) return;
-    const g = new Game(canvasRef.current, roomId, socket, theme);
+    const g = new Game(canvasRef.current, roomId, connection, theme);
     setGame(g);
     return () => g.destroy();
     // theme is read once here for the first paint; later changes go through setTheme
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roomId, socket]);
+  }, [roomId, connection]);
 
   // Setting a canvas's width or height wipes its contents, so every resize needs
   // a repaint. Without this the board stays blank until the next draw.

@@ -3,8 +3,7 @@
  *
  * The pool itself is generated - `packages/common/src/avatars.ts`, written by
  * `scripts/generate-avatars.mjs` from DiceBear. That file is data and nothing
- * else, because the backend loads it as raw source at runtime and Node will
- * not tolerate a type annotation in it. So the logic lives here instead: this
+ * else, as a generated file should be. So the logic lives here instead: this
  * module is the only thing that decides what a valid avatar is, which account
  * gets which one, and what to show when the stored answer is no good.
  *
