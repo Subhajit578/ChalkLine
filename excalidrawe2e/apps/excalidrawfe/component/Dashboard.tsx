@@ -22,6 +22,8 @@ import {
   Check,
   MoreVertical,
   Users,
+  User,
+  LayoutGrid,
   Search,
   X,
   ChevronDown,
@@ -71,6 +73,12 @@ function matchScore(item: Item, q: string): number {
   return 0;
 }
 
+const FILTERS: { value: Filter; nav: string; title: string }[] = [
+  { value: "all", nav: "All", title: "All whiteboards" },
+  { value: "yours", nav: "Yours", title: "Your whiteboards" },
+  { value: "shared", nav: "Shared with you", title: "Shared with you" },
+];
+
 export function Dashboard() {
   const router = useRouter();
   const { theme, setChoice } = useTheme();
@@ -85,14 +93,12 @@ export function Dashboard() {
   const [isLoading, setIsLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // find and filter
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
 
   /**
    * Transient messages, used mainly to announce a rollback — an optimistic
-   * change that gets undone has to say so somewhere that does not blank the
-   * page the person is looking at.
+   * change undone has to say so somewhere that does not blank the page.
    */
   const [notices, setNotices] = useState<Notice[]>([]);
   const notify = useCallback((message: string, tone: "error" | "info" | "success" = "error") => {
@@ -112,13 +118,10 @@ export function Dashboard() {
   const [renameError, setRenameError] = useState<string | null>(null);
 
   const [copiedId, setCopiedId] = useState<number | null>(null);
-  // which overlay card's menu is open, or null
   const [openMenuId, setOpenMenuId] = useState<number | null>(null);
+  // the account block at the sidebar foot: always shown on desktop, a dropdown on mobile
   const [accountOpen, setAccountOpen] = useState(false);
 
-  // who is signed in, so a guest can be offered the upgrade. Asked of the
-  // server rather than read from the token: a token minted before the account
-  // was claimed would keep claiming it is a guest.
   const [me, setMe] = useState<{
     username: string;
     email: string | null;
@@ -143,7 +146,6 @@ export function Dashboard() {
       .catch(() => {});
   }, []);
 
-  // one outside-click closes whichever menu is open
   useEffect(() => {
     if (!accountOpen && openMenuId === null) return;
     const close = () => {
@@ -158,10 +160,6 @@ export function Dashboard() {
     return { Authorization: `Bearer ${getToken()}` };
   }
 
-  /**
-   * Takes the last segment of a pasted link (minus query/fragment), which is
-   * the share id. A bare name also works for canvases you're already in.
-   */
   function slugFromInput(value: string) {
     const trimmed = value.trim().split(/[?#]/)[0] ?? "";
     const parts = trimmed.split("/").filter(Boolean);
@@ -176,7 +174,6 @@ export function Dashboard() {
     setIsJoining(true);
     setJoinError(null);
     try {
-      // join first, so a wrong link reports here rather than on a blank canvas
       const res = await axios.post(
         `${API}/room/${encodeURIComponent(slug)}/join`,
         {},
@@ -235,8 +232,6 @@ export function Dashboard() {
     if (!room) return;
     setDeleteTarget(null);
 
-    // Where it was, not just that it was: restoring a rolled-back delete by
-    // appending would silently reorder the list.
     const index = rooms.findIndex((r) => r.id === room.id);
     setRooms((r) => r.filter((existing) => existing.id !== room.id));
 
@@ -301,31 +296,22 @@ export function Dashboard() {
   }
 
   function toggleTheme() {
-    // a plain two-state switch on top of the browser preference, as asked:
-    // "Switch to light" when dark, "Switch to dark" when light
+    // a plain two-state switch on top of the browser preference
     setChoice(theme === "dark" ? "light" : "dark");
   }
 
   const formatDate = (iso: string) =>
     new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 
-  // owned + joined, flattened, then filtered and searched for the one grid
+  const counts = { all: rooms.length + joinedRooms.length, yours: rooms.length, shared: joinedRooms.length };
+
   const items = useMemo<Item[]>(() => {
     const owned: Item[] = rooms.map((r) => ({
-      id: r.id,
-      slug: r.slug,
-      shareId: r.shareId,
-      date: r.createdAt,
-      shared: false,
+      id: r.id, slug: r.slug, shareId: r.shareId, date: r.createdAt, shared: false,
     }));
     const joined: Item[] = joinedRooms.map((r) => ({
-      id: r.id,
-      slug: r.slug,
-      shareId: r.shareId,
-      date: r.joinedAt ?? r.createdAt,
-      shared: true,
-      owner: r.owner,
-      ownerAvatar: r.ownerAvatar,
+      id: r.id, slug: r.slug, shareId: r.shareId, date: r.joinedAt ?? r.createdAt, shared: true,
+      owner: r.owner, ownerAvatar: r.ownerAvatar,
     }));
     const base = filter === "yours" ? owned : filter === "shared" ? joined : [...owned, ...joined];
 
@@ -340,178 +326,114 @@ export function Dashboard() {
 
   const hasBoards = rooms.length > 0 || joinedRooms.length > 0;
   const noun = (n: number) => (n === 1 ? "whiteboard" : "whiteboards");
+  const activeTitle = FILTERS.find((f) => f.value === filter)!.title;
 
   return (
     <div className="pu">
-      {/* Top bar: wordmark, search, account */}
-      <header className="pu-top">
-        <div className="pu-wrap">
-          <div className="pu-bar">
-            <span className="pu-wordmark">ExcaliDraw</span>
-
-            <div className="pu-search">
-              <Search aria-hidden="true" />
-              <input
-                type="search"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search your whiteboards"
-                aria-label="Search your whiteboards"
-              />
-              {query && (
-                <button
-                  type="button"
-                  className="pu-search-clear"
-                  aria-label="Clear search"
-                  onClick={() => setQuery("")}
-                >
-                  <X aria-hidden="true" />
-                </button>
-              )}
-            </div>
-
-            {me && (
-              <div className="pu-menu-wrap">
-                <button
-                  type="button"
-                  className="pu-me"
-                  aria-haspopup="menu"
-                  aria-expanded={accountOpen}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setAccountOpen((o) => !o);
-                    setOpenMenuId(null);
-                  }}
-                >
-                  <Avatar id={me.avatar} username={me.username} size={34} />
-                  <span className="pu-me-name">{me.username}</span>
-                  <ChevronDown className="pu-me-chev" aria-hidden="true" />
-                </button>
-
-                {accountOpen && (
-                  <div className="pu-menu" role="menu" onClick={(e) => e.stopPropagation()}>
-                    <div className="pu-menu-head">
-                      <Avatar id={me.avatar} username={me.username} size={36} />
-                      <div className="pu-menu-head-t">
-                        <b>{me.username}</b>
-                        <span>{me.isGuest ? "Guest account" : me.email ?? "Signed in"}</span>
-                      </div>
-                    </div>
-                    <div className="pu-menu-sep" />
-                    <button
-                      type="button"
-                      role="menuitem"
-                      className="pu-menu-item"
-                      onClick={() => {
-                        setPickingAvatar(true);
-                        setAccountOpen(false);
-                      }}
-                    >
-                      <UserRound aria-hidden="true" />
-                      Change avatar
-                    </button>
-                    {me.isGuest && (
-                      <button
-                        type="button"
-                        role="menuitem"
-                        className="pu-menu-item"
-                        onClick={() => {
-                          setClaiming(true);
-                          setAccountOpen(false);
-                        }}
-                      >
-                        <UserPlus aria-hidden="true" />
-                        Claim your account
-                        <span className="pu-menu-tag">Guest</span>
-                      </button>
-                    )}
-                    <div className="pu-menu-sep" />
-                    <button
-                      type="button"
-                      role="menuitem"
-                      className="pu-menu-item"
-                      onClick={() => {
-                        toggleTheme();
-                        setAccountOpen(false);
-                      }}
-                    >
-                      {theme === "dark" ? <Sun aria-hidden="true" /> : <Moon aria-hidden="true" />}
-                      {theme === "dark" ? "Switch to light" : "Switch to dark"}
-                    </button>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      className="pu-menu-item"
-                      onClick={handleLogout}
-                    >
-                      <LogOut aria-hidden="true" />
-                      Sign out
-                    </button>
-                    <div className="pu-menu-sep" />
-                    <button
-                      type="button"
-                      role="menuitem"
-                      className="pu-menu-item pu-menu-item--danger"
-                      onClick={() => {
-                        setDeletingAccount(true);
-                        setAccountOpen(false);
-                      }}
-                    >
-                      <Trash2 aria-hidden="true" />
-                      Delete account
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-      </header>
-
-      <main className="pu-wrap pu-main">
-        {/* Heading */}
-        <div className="pu-head">
-          <div className="pu-head-title">
-            <h1 className="pu-title">Whiteboards</h1>
-            {!isLoading && !errorMsg && (
-              <span className="pu-count">
-                {items.length} {noun(items.length)}
-              </span>
-            )}
-          </div>
+      {/* Sidebar: wordmark, filter nav, account at the foot */}
+      <aside className="pu-side">
+        <div className="pu-side-top">
+          <span className="pu-wordmark">ExcaliDraw</span>
+          {me && (
+            <button
+              type="button"
+              className="pu-side-acct"
+              aria-label="Account"
+              aria-haspopup="menu"
+              aria-expanded={accountOpen}
+              onClick={(e) => {
+                e.stopPropagation();
+                setAccountOpen((o) => !o);
+                setOpenMenuId(null);
+              }}
+            >
+              <Avatar id={me.avatar} username={me.username} size={28} />
+              <ChevronDown aria-hidden="true" />
+            </button>
+          )}
         </div>
 
-        {/* Controls: filter, join, new */}
-        <div className="pu-controls">
-          <div className="pu-seg" role="tablist" aria-label="Filter whiteboards">
-            {(
-              [
-                ["all", "All"],
-                ["yours", "Yours"],
-                ["shared", "Shared with you"],
-              ] as [Filter, string][]
-            ).map(([value, label]) => (
+        <p className="pu-side-label">Library</p>
+        <nav className="pu-side-nav" aria-label="Filter whiteboards">
+          {FILTERS.map((f) => {
+            const Icon = f.value === "all" ? LayoutGrid : f.value === "yours" ? User : Users;
+            return (
               <button
-                key={value}
+                key={f.value}
                 type="button"
-                role="tab"
-                aria-selected={filter === value}
-                onClick={() => setFilter(value)}
+                className="pu-nav-item"
+                aria-current={filter === f.value}
+                onClick={() => setFilter(f.value)}
               >
-                {label}
+                <Icon aria-hidden="true" />
+                {f.nav}
+                <span className="pu-nav-count">{counts[f.value]}</span>
               </button>
-            ))}
+            );
+          })}
+        </nav>
+
+        {me && (
+          <div className="pu-side-foot" data-open={accountOpen ? "true" : "false"} onClick={(e) => e.stopPropagation()}>
+            <div className="pu-side-user">
+              <Avatar id={me.avatar} username={me.username} size={36} />
+              <div className="pu-side-user-t">
+                <b>{me.username}</b>
+                <span>{me.isGuest ? "Guest account" : me.email ?? "Signed in"}</span>
+              </div>
+            </div>
+            <button type="button" className="pu-side-item" onClick={() => { setPickingAvatar(true); setAccountOpen(false); }}>
+              <UserRound aria-hidden="true" />
+              Change avatar
+            </button>
+            {me.isGuest && (
+              <button type="button" className="pu-side-item" onClick={() => { setClaiming(true); setAccountOpen(false); }}>
+                <UserPlus aria-hidden="true" />
+                Claim your account
+                <span className="pu-menu-tag">Guest</span>
+              </button>
+            )}
+            <button type="button" className="pu-side-item" onClick={() => { toggleTheme(); setAccountOpen(false); }}>
+              {theme === "dark" ? <Sun aria-hidden="true" /> : <Moon aria-hidden="true" />}
+              {theme === "dark" ? "Switch to light" : "Switch to dark"}
+            </button>
+            <button type="button" className="pu-side-item" onClick={handleLogout}>
+              <LogOut aria-hidden="true" />
+              Sign out
+            </button>
+            <button type="button" className="pu-side-item pu-side-item--danger" onClick={() => { setDeletingAccount(true); setAccountOpen(false); }}>
+              <Trash2 aria-hidden="true" />
+              Delete account
+            </button>
+          </div>
+        )}
+      </aside>
+
+      {/* Body: toolbar + content */}
+      <div className="pu-body">
+        <div className="pu-toolbar">
+          <div className="pu-search">
+            <Search aria-hidden="true" />
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search your whiteboards"
+              aria-label="Search your whiteboards"
+            />
+            {query && (
+              <button type="button" className="pu-search-clear" aria-label="Clear search" onClick={() => setQuery("")}>
+                <X aria-hidden="true" />
+              </button>
+            )}
           </div>
 
-          <div className="pu-actions">
+          <div className="pu-toolbar-actions">
             <form onSubmit={handleJoin} className="pu-join-wrap">
               <div className="pu-join">
                 <input
                   value={joinInput}
-                  onChange={(e) => {
-                    setJoinInput(e.target.value);
-                    setJoinError(null);
-                  }}
+                  onChange={(e) => { setJoinInput(e.target.value); setJoinError(null); }}
                   placeholder="Paste a link to join…"
                   aria-label="Join by link"
                   aria-invalid={joinError ? true : undefined}
@@ -521,11 +443,7 @@ export function Dashboard() {
                   {isJoining ? "Joining…" : "Join"}
                 </button>
               </div>
-              {joinError && (
-                <p id="join-error" className="pu-slip">
-                  {joinError}
-                </p>
-              )}
+              {joinError && <p id="join-error" className="pu-slip">{joinError}</p>}
             </form>
 
             <button type="button" onClick={() => setIsCreateOpen(true)} className="pu-btn pu-btn--primary">
@@ -535,150 +453,148 @@ export function Dashboard() {
           </div>
         </div>
 
-        {/* Grid */}
-        {isLoading ? (
-          <ul className="pu-grid" aria-label="Loading whiteboards" aria-busy="true">
-            {[...Array(8)].map((_, i) => (
-              <li key={i} className="pu-skel" />
-            ))}
-          </ul>
-        ) : errorMsg ? (
-          <div className="pu-notice pu-notice--error" role="alert">
-            {errorMsg}
+        <main className="pu-main">
+          <div className="pu-head">
+            <h1 className="pu-title">{activeTitle}</h1>
+            {!isLoading && !errorMsg && (
+              <span className="pu-count">{items.length} {noun(items.length)}</span>
+            )}
           </div>
-        ) : !hasBoards ? (
-          <div className="pu-notice">
-            <h3>No whiteboards yet</h3>
-            <p>Create your first whiteboard to start drawing, or paste a link to join one.</p>
-            <button type="button" onClick={() => setIsCreateOpen(true)} className="pu-btn pu-btn--primary">
-              <Plus aria-hidden="true" />
-              New whiteboard
-            </button>
-          </div>
-        ) : items.length === 0 ? (
-          <div className="pu-notice">
-            <h3>Nothing matches</h3>
-            <p>
-              {query
-                ? `No whiteboards match "${query.trim()}".`
-                : filter === "shared"
-                  ? "No one has shared a whiteboard with you yet."
-                  : "You don't own any whiteboards yet."}
-            </p>
-          </div>
-        ) : (
-          <ul className="pu-grid">
-            {items.map((item) => (
-              <li key={`${item.shared ? "s" : "o"}-${item.id}`} className="pu-card">
-                <button
-                  type="button"
-                  className="pu-card-open"
-                  aria-label={`Open ${item.slug}`}
-                  onClick={() => router.push(`/canvas/${item.shareId}`)}
-                />
 
-                <BoardThumb roomId={item.id} name={item.slug} />
-
-                {item.shared && (
-                  <span className="pu-card-chip">
-                    <Users aria-hidden="true" />
-                    Shared
-                  </span>
-                )}
-
-                <div className="pu-menu-wrap">
+          {isLoading ? (
+            <ul className="pu-grid" aria-label="Loading whiteboards" aria-busy="true">
+              {[...Array(10)].map((_, i) => (
+                <li key={i} className="pu-skel" />
+              ))}
+            </ul>
+          ) : errorMsg ? (
+            <div className="pu-notice pu-notice--error" role="alert">{errorMsg}</div>
+          ) : !hasBoards ? (
+            <div className="pu-notice">
+              <h3>No whiteboards yet</h3>
+              <p>Create your first whiteboard to start drawing, or paste a link to join one.</p>
+              <button type="button" onClick={() => setIsCreateOpen(true)} className="pu-btn pu-btn--primary">
+                <Plus aria-hidden="true" />
+                New whiteboard
+              </button>
+            </div>
+          ) : items.length === 0 ? (
+            <div className="pu-notice">
+              <h3>Nothing matches</h3>
+              <p>
+                {query
+                  ? `No whiteboards match "${query.trim()}".`
+                  : filter === "shared"
+                    ? "No one has shared a whiteboard with you yet."
+                    : "You don't own any whiteboards yet."}
+              </p>
+            </div>
+          ) : (
+            <ul className="pu-grid">
+              {items.map((item) => (
+                <li key={`${item.shared ? "s" : "o"}-${item.id}`} className="pu-card">
                   <button
                     type="button"
-                    className="pu-card-more"
-                    aria-label="More options"
-                    aria-haspopup="menu"
-                    aria-expanded={openMenuId === item.id}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setOpenMenuId(openMenuId === item.id ? null : item.id);
-                      setAccountOpen(false);
-                    }}
-                  >
-                    <MoreVertical aria-hidden="true" />
-                  </button>
-                  {openMenuId === item.id && (
-                    <div className="pu-menu pu-menu--card" role="menu" onClick={(e) => e.stopPropagation()}>
-                      {!item.shared && (
+                    className="pu-card-open"
+                    aria-label={`Open ${item.slug}`}
+                    onClick={() => router.push(`/canvas/${item.shareId}`)}
+                  />
+
+                  <BoardThumb roomId={item.id} name={item.slug} />
+
+                  {item.shared && (
+                    <span className="pu-card-chip">
+                      <Users aria-hidden="true" />
+                      Shared
+                    </span>
+                  )}
+
+                  <div className="pu-menu-wrap">
+                    <button
+                      type="button"
+                      className="pu-card-more"
+                      aria-label="More options"
+                      aria-haspopup="menu"
+                      aria-expanded={openMenuId === item.id}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setOpenMenuId(openMenuId === item.id ? null : item.id);
+                        setAccountOpen(false);
+                      }}
+                    >
+                      <MoreVertical aria-hidden="true" />
+                    </button>
+                    {openMenuId === item.id && (
+                      <div className="pu-menu" role="menu" onClick={(e) => e.stopPropagation()}>
+                        {!item.shared && (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className="pu-menu-item"
+                            onClick={() => {
+                              const room = rooms.find((r) => r.id === item.id);
+                              if (room) { setRenameTarget(room); setRenameSlug(room.slug); }
+                              setOpenMenuId(null);
+                            }}
+                          >
+                            <Pencil aria-hidden="true" />
+                            Rename
+                          </button>
+                        )}
                         <button
                           type="button"
                           role="menuitem"
                           className="pu-menu-item"
-                          onClick={() => {
-                            const room = rooms.find((r) => r.id === item.id);
-                            if (room) {
-                              setRenameTarget(room);
-                              setRenameSlug(room.slug);
-                            }
-                            setOpenMenuId(null);
-                          }}
+                          onClick={() => handleShare(item)}
                         >
-                          <Pencil aria-hidden="true" />
-                          Rename
+                          {copiedId === item.id ? (
+                            <>
+                              <Check aria-hidden="true" className="pu-copied" />
+                              Copied!
+                            </>
+                          ) : (
+                            <>
+                              <Link2 aria-hidden="true" />
+                              Copy link
+                            </>
+                          )}
                         </button>
-                      )}
-                      <button
-                        type="button"
-                        role="menuitem"
-                        className="pu-menu-item"
-                        onClick={() => {
-                          handleShare(item);
-                        }}
-                      >
-                        {copiedId === item.id ? (
+                        {!item.shared && (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className="pu-menu-item pu-menu-item--danger"
+                            onClick={() => { handleDelete(item.id); setOpenMenuId(null); }}
+                          >
+                            <Trash2 aria-hidden="true" />
+                            Delete
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="pu-card-bar">
+                    <div className="pu-card-bar-t">
+                      <div className="pu-card-name">{item.slug}</div>
+                      <div className="pu-card-sub">
+                        {item.shared ? (
                           <>
-                            <Check aria-hidden="true" className="pu-copied" />
-                            Copied!
+                            <Avatar id={item.ownerAvatar} username={item.owner} size={14} lazy />
+                            <span>{item.owner ? item.owner : "Shared with you"}</span>
                           </>
                         ) : (
-                          <>
-                            <Link2 aria-hidden="true" />
-                            Copy link
-                          </>
+                          <span>{formatDate(item.date)}</span>
                         )}
-                      </button>
-                      {!item.shared && (
-                        <button
-                          type="button"
-                          role="menuitem"
-                          className="pu-menu-item pu-menu-item--danger"
-                          onClick={() => {
-                            handleDelete(item.id);
-                            setOpenMenuId(null);
-                          }}
-                        >
-                          <Trash2 aria-hidden="true" />
-                          Delete
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </div>
-
-                <div className="pu-card-bar">
-                  <div className="pu-card-bar-t">
-                    <div className="pu-card-name">{item.slug}</div>
-                    <div className="pu-card-sub">
-                      {item.shared ? (
-                        <>
-                          <Avatar id={item.ownerAvatar} username={item.owner} size={14} lazy />
-                          <span>{item.owner ? item.owner : "Shared with you"}</span>
-                        </>
-                      ) : (
-                        <span>{formatDate(item.date)}</span>
-                      )}
+                      </div>
                     </div>
                   </div>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </main>
+                </li>
+              ))}
+            </ul>
+          )}
+        </main>
+      </div>
 
       <ToastStack notices={notices} onDismiss={dismissNotice} />
 
@@ -695,10 +611,7 @@ export function Dashboard() {
       {claiming && me && (
         <ClaimAccountDialog
           username={me.username}
-          onClaimed={() => {
-            setMe({ ...me, isGuest: false });
-            setClaiming(false);
-          }}
+          onClaimed={() => { setMe({ ...me, isGuest: false }); setClaiming(false); }}
           onClose={() => setClaiming(false)}
         />
       )}
@@ -708,10 +621,7 @@ export function Dashboard() {
           isGuest={me?.isGuest ?? false}
           roomCount={rooms.length}
           onCancel={() => setDeletingAccount(false)}
-          onDeleted={() => {
-            clearToken();
-            router.push("/signin");
-          }}
+          onDeleted={() => { clearToken(); router.push("/signin"); }}
         />
       )}
 
