@@ -234,7 +234,7 @@ html:has(.pu), body:has(.pu) { margin: 0; background: var(--pu-surface); }
 
 .pu-main { flex: 1; padding: 24px 32px 56px; }
 .pu-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; margin-bottom: 18px; }
-.pu-title { font: 500 32px/1.05 var(--pu-font-sans); letter-spacing: -0.01em; color: var(--pu-ink); }
+.pu-title { font: 600 44px/1 var(--pu-font-sans); letter-spacing: -0.025em; color: var(--pu-ink); }
 .pu-count { font: 400 15px/1 var(--pu-font-sans); color: var(--pu-ink-muted); }
 
 /* ---------- buttons ---------- */
@@ -411,7 +411,7 @@ html:has(.pu), body:has(.pu) { margin: 0; background: var(--pu-surface); }
   .pu-toolbar-actions .pu-join input { width: auto; flex: 1; }
   .pu-main { padding: 20px 16px 48px; }
   .pu-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; }
-  .pu-title { font-size: 24px; }
+  .pu-title { font-size: 31px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
