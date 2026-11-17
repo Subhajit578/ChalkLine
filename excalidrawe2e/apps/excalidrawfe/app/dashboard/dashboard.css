@@ -51,8 +51,10 @@
 
   --pu-side-w: 248px;
 
-  --pu-font-sans: var(--font-space-grotesk), system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  --pu-font-serif: var(--font-space-grotesk), system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  /* --pu-font-* are declared on .pu (below), NOT here: the next/font variable
+     --font-space-grotesk lives on the layout wrapper div, so it is undefined at
+     :root; resolving the stack here would compute to empty and silently drop
+     every `font:` shorthand that uses it (that was the Arial / wrong-size bug). */
 }
 
 :root[data-theme="dark"] {
@@ -120,6 +122,8 @@ html:has(.pu), body:has(.pu) { margin: 0; background: var(--pu-surface); }
 
 /* ---------- shell: sidebar + fluid body ---------- */
 .pu {
+  --pu-font-sans: var(--font-space-grotesk), system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --pu-font-serif: var(--font-space-grotesk), system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   display: flex;
   align-items: stretch;
   min-height: 100vh;
