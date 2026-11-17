@@ -25,15 +25,15 @@
   --pu-success: #0f7a4e;
   --pu-scrim: rgba(27, 28, 30, 0.55);
 
-  /* board card — light framed in light mode */
-  --pu-card-bg: var(--pu-raised);
-  --pu-card-border: var(--pu-border);
-  --pu-card-hover-border: var(--pu-border-strong);
-  --pu-card-ink: var(--pu-ink);
-  --pu-card-sub: var(--pu-ink-muted);
-  --pu-card-thumb: var(--pu-sunken);
-  --pu-card-thumb-border: var(--pu-border);
-  --pu-skel-piece: rgba(16, 18, 27, 0.08);
+  /* board card — DARK MATTE on the light page (card contrasts the page) */
+  --pu-card-bg: linear-gradient(180deg, #262a31 0%, #14161a 100%);
+  --pu-card-border: #2c3139;
+  --pu-card-hover-border: #3a4049;
+  --pu-card-ink: #f3f4f6;
+  --pu-card-sub: #9aa4b0;
+  --pu-card-thumb: #ffffff;
+  --pu-card-thumb-border: transparent;
+  --pu-skel-piece: rgba(255, 255, 255, 0.12);
 
   --pu-r-xs: 6px;
   --pu-r-sm: 8px;
@@ -73,15 +73,15 @@
   --pu-success: #58c892;
   --pu-scrim: rgba(0, 0, 0, 0.6);
 
-  /* board card — dark matte in dark mode */
-  --pu-card-bg: linear-gradient(180deg, #262a31 0%, #14161a 100%);
-  --pu-card-border: #2c3139;
-  --pu-card-hover-border: #3a4049;
-  --pu-card-ink: #f3f4f6;
-  --pu-card-sub: #9aa4b0;
-  --pu-card-thumb: #ffffff;
-  --pu-card-thumb-border: transparent;
-  --pu-skel-piece: rgba(255, 255, 255, 0.12);
+  /* board card — LIGHT FRAMED (white) on the dark page (card contrasts the page) */
+  --pu-card-bg: #ffffff;
+  --pu-card-border: #e4e6ea;
+  --pu-card-hover-border: #cfd3da;
+  --pu-card-ink: #1b1c1e;
+  --pu-card-sub: #585c66;
+  --pu-card-thumb: #eceef2;
+  --pu-card-thumb-border: #e0e3e9;
+  --pu-skel-piece: rgba(16, 18, 27, 0.08);
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -102,15 +102,15 @@
     --pu-success: #58c892;
     --pu-scrim: rgba(0, 0, 0, 0.6);
 
-  /* board card — dark matte in dark mode */
-  --pu-card-bg: linear-gradient(180deg, #262a31 0%, #14161a 100%);
-  --pu-card-border: #2c3139;
-  --pu-card-hover-border: #3a4049;
-  --pu-card-ink: #f3f4f6;
-  --pu-card-sub: #9aa4b0;
-  --pu-card-thumb: #ffffff;
-  --pu-card-thumb-border: transparent;
-  --pu-skel-piece: rgba(255, 255, 255, 0.12);
+  /* board card — LIGHT FRAMED (white) on the dark page (card contrasts the page) */
+  --pu-card-bg: #ffffff;
+  --pu-card-border: #e4e6ea;
+  --pu-card-hover-border: #cfd3da;
+  --pu-card-ink: #1b1c1e;
+  --pu-card-sub: #585c66;
+  --pu-card-thumb: #eceef2;
+  --pu-card-thumb-border: #e0e3e9;
+  --pu-skel-piece: rgba(16, 18, 27, 0.08);
   }
 }
 
