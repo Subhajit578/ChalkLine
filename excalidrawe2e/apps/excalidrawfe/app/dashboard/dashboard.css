@@ -25,6 +25,16 @@
   --pu-success: #0f7a4e;
   --pu-scrim: rgba(27, 28, 30, 0.55);
 
+  /* board card — light framed in light mode */
+  --pu-card-bg: var(--pu-raised);
+  --pu-card-border: var(--pu-border);
+  --pu-card-hover-border: var(--pu-border-strong);
+  --pu-card-ink: var(--pu-ink);
+  --pu-card-sub: var(--pu-ink-muted);
+  --pu-card-thumb: var(--pu-sunken);
+  --pu-card-thumb-border: var(--pu-border);
+  --pu-skel-piece: rgba(16, 18, 27, 0.08);
+
   --pu-r-xs: 6px;
   --pu-r-sm: 8px;
   --pu-r-md: 12px;
@@ -62,6 +72,16 @@
   --pu-danger-quiet: #34140f;
   --pu-success: #58c892;
   --pu-scrim: rgba(0, 0, 0, 0.6);
+
+  /* board card — dark matte in dark mode */
+  --pu-card-bg: linear-gradient(180deg, #262a31 0%, #14161a 100%);
+  --pu-card-border: #2c3139;
+  --pu-card-hover-border: #3a4049;
+  --pu-card-ink: #f3f4f6;
+  --pu-card-sub: #9aa4b0;
+  --pu-card-thumb: #ffffff;
+  --pu-card-thumb-border: transparent;
+  --pu-skel-piece: rgba(255, 255, 255, 0.12);
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -81,6 +101,16 @@
     --pu-danger-quiet: #34140f;
     --pu-success: #58c892;
     --pu-scrim: rgba(0, 0, 0, 0.6);
+
+  /* board card — dark matte in dark mode */
+  --pu-card-bg: linear-gradient(180deg, #262a31 0%, #14161a 100%);
+  --pu-card-border: #2c3139;
+  --pu-card-hover-border: #3a4049;
+  --pu-card-ink: #f3f4f6;
+  --pu-card-sub: #9aa4b0;
+  --pu-card-thumb: #ffffff;
+  --pu-card-thumb-border: transparent;
+  --pu-skel-piece: rgba(255, 255, 255, 0.12);
   }
 }
 
@@ -255,26 +285,26 @@ html:has(.pu), body:has(.pu) { margin: 0; background: var(--pu-surface); }
    deliberately dark in BOTH themes, so the bright board preview pops. */
 .pu-card {
   position: relative; display: flex; flex-direction: column; padding: 10px; border-radius: 14px;
-  background: linear-gradient(180deg, #262a31 0%, #14161a 100%);
-  border: 1px solid #2c3139; box-shadow: var(--pu-shadow-card);
+  background: var(--pu-card-bg);
+  border: 1px solid var(--pu-card-border); box-shadow: var(--pu-shadow-card);
   transition: box-shadow var(--pu-dur) var(--pu-ease), border-color var(--pu-dur) var(--pu-ease), transform var(--pu-dur) var(--pu-ease);
 }
-.pu-card:hover { transform: translateY(-3px); border-color: #3a4049; box-shadow: 0 12px 28px -10px rgba(5, 8, 14, 0.55); }
+.pu-card:hover { transform: translateY(-3px); border-color: var(--pu-card-hover-border); box-shadow: var(--pu-shadow-pop); }
 .pu-card:has(.pu-menu) { z-index: 40; }
 .pu-card-open { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; background: none; cursor: pointer; border-radius: 14px; }
 .pu-card-open:focus-visible { outline: 2px solid var(--pu-accent); outline-offset: 2px; }
 .pu-card-media { position: relative; }
 
-.pu-thumb { position: relative; display: block; aspect-ratio: 16 / 10; border-radius: 8px; overflow: hidden; background: #ffffff; pointer-events: none; }
+.pu-thumb { position: relative; display: block; aspect-ratio: 16 / 10; border-radius: 8px; overflow: hidden; background: var(--pu-card-thumb); box-shadow: inset 0 0 0 1px var(--pu-card-thumb-border); pointer-events: none; }
 .pu-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.pu-thumb--pending { background: #edeff2; animation: pu-pulse 1.4s var(--pu-ease) infinite alternate; }
-.pu-thumb-empty { position: absolute; inset: 0; display: grid; place-items: center; color: #c3c7cf; }
+.pu-thumb--pending { animation: pu-pulse 1.4s var(--pu-ease) infinite alternate; }
+.pu-thumb-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--pu-ink-faint); }
 .pu-thumb-empty svg { width: 28px; height: 28px; }
 @keyframes pu-pulse { from { opacity: 1; } to { opacity: 0.5; } }
 
 .pu-card-meta { padding: 10px 3px 2px; }
-.pu-card-name { font: 500 15px/1.25 var(--pu-font-serif); color: #f3f4f6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pu-card-sub { display: flex; align-items: center; gap: 7px; margin-top: 4px; font: 400 12px/1.3 var(--pu-font-sans); color: #9aa4b0; min-width: 0; }
+.pu-card-name { font: 500 15px/1.25 var(--pu-font-serif); color: var(--pu-card-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pu-card-sub { display: flex; align-items: center; gap: 7px; margin-top: 4px; font: 400 12px/1.3 var(--pu-font-sans); color: var(--pu-card-sub); min-width: 0; }
 .pu-card-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--card-accent, #9aa4b0); }
 .pu-card-sub > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -295,9 +325,9 @@ html:has(.pu), body:has(.pu) { margin: 0; background: var(--pu-surface); }
 }
 .pu-card-chip svg { width: 12px; height: 12px; }
 
-.pu-skel { display: flex; flex-direction: column; padding: 10px; border-radius: 14px; background: linear-gradient(180deg, #262a31 0%, #14161a 100%); border: 1px solid #2c3139; }
-.pu-skel-thumb { aspect-ratio: 16 / 10; border-radius: 8px; background: rgba(255, 255, 255, 0.12); animation: pu-pulse 1.4s var(--pu-ease) infinite alternate; }
-.pu-skel-line { height: 12px; border-radius: 6px; background: rgba(255, 255, 255, 0.12); margin: 12px 3px 0; animation: pu-pulse 1.4s var(--pu-ease) infinite alternate; }
+.pu-skel { display: flex; flex-direction: column; padding: 10px; border-radius: 14px; background: var(--pu-card-bg); border: 1px solid var(--pu-card-border); }
+.pu-skel-thumb { aspect-ratio: 16 / 10; border-radius: 8px; background: var(--pu-skel-piece); animation: pu-pulse 1.4s var(--pu-ease) infinite alternate; }
+.pu-skel-line { height: 12px; border-radius: 6px; background: var(--pu-skel-piece); margin: 12px 3px 0; animation: pu-pulse 1.4s var(--pu-ease) infinite alternate; }
 .pu-skel-line--sm { width: 50%; height: 9px; margin-top: 8px; }
 
 /* ---------- per-card dropdown menu ---------- */
