@@ -472,7 +472,11 @@ export function Dashboard() {
           {isLoading ? (
             <ul className="pu-grid" aria-label="Loading whiteboards" aria-busy="true">
               {[...Array(10)].map((_, i) => (
-                <li key={i} className="pu-skel" />
+                <li key={i} className="pu-skel">
+                  <div className="pu-skel-thumb" />
+                  <div className="pu-skel-line" />
+                  <div className="pu-skel-line pu-skel-line--sm" />
+                </li>
               ))}
             </ul>
           ) : errorMsg ? (
@@ -512,6 +516,7 @@ export function Dashboard() {
                     onClick={() => router.push(`/canvas/${item.shareId}`)}
                   />
 
+                  <div className="pu-card-media">
                   <BoardThumb roomId={item.id} name={item.slug} />
 
                   {item.shared && (
@@ -586,19 +591,22 @@ export function Dashboard() {
                     )}
                   </div>
 
-                  <div className="pu-card-bar">
-                    <div className="pu-card-bar-t">
-                      <div className="pu-card-name">{item.slug}</div>
-                      <div className="pu-card-sub">
-                        {item.shared ? (
-                          <>
-                            <Avatar id={item.ownerAvatar} username={item.owner} size={14} lazy />
-                            <span>{item.owner ? item.owner : "Shared with you"}</span>
-                          </>
-                        ) : (
+                  </div>
+
+                  <div className="pu-card-meta">
+                    <div className="pu-card-name">{item.slug}</div>
+                    <div className="pu-card-sub">
+                      {item.shared ? (
+                        <>
+                          <Avatar id={item.ownerAvatar} username={item.owner} size={16} lazy />
+                          <span>{item.owner ? item.owner : "Shared with you"}</span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="pu-card-dot" />
                           <span>{formatDate(item.date)}</span>
-                        )}
-                      </div>
+                        </>
+                      )}
                     </div>
                   </div>
                 </li>
