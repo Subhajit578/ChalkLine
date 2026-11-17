@@ -38,7 +38,8 @@ export function BoardThumb({ roomId, name }: { roomId: number; name: string }) {
         }
         // target a ~480px long edge so each thumbnail stays a small bitmap
         const scale = Math.min(2, Math.max(0.05, 480 / Math.max(box.width, box.height)));
-        const result = await renderShapesToBlob(shapes, new Map(), scale);
+        // render on the dark canvas so the preview matches the dark matte card
+        const result = await renderShapesToBlob(shapes, new Map(), scale, "dark");
         if (cancelled || !result) {
           setStatus("blank");
           return;

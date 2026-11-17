@@ -104,18 +104,18 @@ export function exportScale(width: number, height: number, wanted: number): numb
 }
 
 /**
- * Draw shapes into an off-screen bitmap.
+ * Draw shapes into an off-screen bitmap, in the given theme's palette.
  *
- * Always in the light palette. A board worked on at night is stored as
- * palette names, not colours, so it can be printed in whichever theme suits
- * paper - and that is the light one. Exporting a dark board as a dark page
- * is a wall of toner nobody asked for, and is the one place where the
- * decision to store names rather than hex values actually pays out.
+ * Defaults to light: a board is stored as palette names, not colours, so a
+ * PDF export prints in whichever theme suits paper - the light one. The
+ * dashboard thumbnail passes "dark" instead, so the preview is bright shapes
+ * on a near-black ground and sits flush on the dark matte card.
  */
 export async function renderShapesToBlob(
   shapes: readonly Shape[],
   images: ReadonlyMap<string, ImageBitmap | "loading" | "failed">,
-  requestedScale: number
+  requestedScale: number,
+  theme: ThemeName = "light"
 ): Promise<BoardRender | null> {
   const box = exportBounds(shapes);
   if (!box) return null;
@@ -131,7 +131,6 @@ export async function renderShapesToBlob(
   const ctx = canvas.getContext("2d");
   if (!ctx) return null;
 
-  const theme: ThemeName = "light";
   const renderer = new ShapeRenderer(ctx);
 
   renderer.clear(THEMES[theme].canvas);
