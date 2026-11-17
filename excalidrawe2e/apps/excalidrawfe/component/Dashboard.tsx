@@ -1,25 +1,34 @@
 "use client";
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import axios from "axios";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { getToken, clearToken, installSessionGuard } from "@/lib/session";
 import { API_URL as API } from "@/lib/config";
 import { errorMessage, errorStatus } from "@/lib/errors";
-import { ClaimAccountBanner } from "./ClaimAccountBanner";
 import { DeleteAccountDialog } from "./DeleteAccountDialog";
+import { ClaimAccountDialog } from "./ClaimAccountDialog";
 import { Avatar } from "./Avatar";
 import { AvatarPicker } from "./AvatarPicker";
+import { BoardThumb } from "./BoardThumb";
 import { makeNotice, ToastStack, type Notice } from "./Toast";
+import { useTheme } from "./ThemeProvider";
 import {
   Plus,
   Trash2,
   LogOut,
   Pencil,
-  Share2,
+  Link2,
   Check,
   MoreVertical,
   Users,
+  Search,
+  X,
+  ChevronDown,
+  UserRound,
+  UserPlus,
+  Moon,
+  Sun,
 } from "lucide-react";
 
 type Room = {
@@ -39,12 +48,36 @@ type JoinedRoom = Room & {
   joinedAt?: string;
 };
 
+type Filter = "all" | "yours" | "shared";
+
+/** A board of either kind, flattened for the one grid, search and filter. */
+type Item = {
+  id: number;
+  slug: string;
+  shareId: string;
+  date: string;
+  shared: boolean;
+  owner?: string;
+  ownerAvatar?: string;
+};
+
+/** Rank a board against the query: name beats owner, a prefix beats a mid-word hit. */
+function matchScore(item: Item, q: string): number {
+  const name = item.slug.toLowerCase();
+  if (name === q) return 100;
+  if (name.startsWith(q)) return 80;
+  if (name.includes(q)) return 60;
+  if (item.owner && item.owner.toLowerCase().includes(q)) return 30;
+  return 0;
+}
+
 export function Dashboard() {
   const router = useRouter();
+  const { theme, setChoice } = useTheme();
+
   const [rooms, setRooms] = useState<Room[]>([]);
   // rooms other people own, picked up by opening their link
   const [joinedRooms, setJoinedRooms] = useState<JoinedRoom[]>([]);
-  // the canvas awaiting a delete confirmation, or null
   const [deleteTarget, setDeleteTarget] = useState<Room | null>(null);
   const [joinInput, setJoinInput] = useState("");
   const [isJoining, setIsJoining] = useState(false);
@@ -52,14 +85,14 @@ export function Dashboard() {
   const [isLoading, setIsLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  // find and filter
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<Filter>("all");
+
   /**
-   * Transient messages, used mainly to announce a rollback.
-   *
-   * `errorMsg` renders *instead of* the canvas list, which is right for
-   * "nothing loaded" and wrong for "that one change did not stick" - it would
-   * blank the page to report a failed rename. An optimistic change that gets
-   * undone has to say so somewhere that does not destroy what the person is
-   * looking at.
+   * Transient messages, used mainly to announce a rollback — an optimistic
+   * change that gets undone has to say so somewhere that does not blank the
+   * page the person is looking at.
    */
   const [notices, setNotices] = useState<Notice[]>([]);
   const notify = useCallback((message: string, tone: "error" | "info" | "success" = "error") => {
@@ -69,20 +102,19 @@ export function Dashboard() {
     setNotices((current) => current.filter((n) => n.id !== id));
   }, []);
 
-  // Todo - Create a createModal 
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [newSlug, setNewSlug] = useState("");
   const [isCreating, setIsCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
 
-  // Todo - Create rename modal
   const [renameTarget, setRenameTarget] = useState<Room | null>(null);
   const [renameSlug, setRenameSlug] = useState("");
   const [renameError, setRenameError] = useState<string | null>(null);
 
-  // Todo - Create share + per-card menu
   const [copiedId, setCopiedId] = useState<number | null>(null);
+  // which overlay card's menu is open, or null
   const [openMenuId, setOpenMenuId] = useState<number | null>(null);
+  const [accountOpen, setAccountOpen] = useState(false);
 
   // who is signed in, so a guest can be offered the upgrade. Asked of the
   // server rather than read from the token: a token minted before the account
@@ -91,7 +123,6 @@ export function Dashboard() {
     username: string;
     email: string | null;
     isGuest: boolean;
-    /** the avatar to render - always a valid one, see the server's avatarFor */
     avatar: string | null;
   } | null>(null);
   const [pickingAvatar, setPickingAvatar] = useState(false);
@@ -99,11 +130,7 @@ export function Dashboard() {
   const [deletingAccount, setDeletingAccount] = useState(false);
 
   useEffect(() => {
-    // before the first authenticated call: a token whose account has been
-    // deleted still looks valid here, and only the server can say otherwise
     installSessionGuard();
-    // getToken drops an expired one, so this also covers a session that ran
-    // out while the tab was closed
     const token = getToken();
     if (!token) {
       router.push("/signin");
@@ -116,22 +143,24 @@ export function Dashboard() {
       .catch(() => {});
   }, []);
 
+  // one outside-click closes whichever menu is open
   useEffect(() => {
-    const close = () => setOpenMenuId(null);
-    if (openMenuId !== null) {
-      window.addEventListener("click", close);
-      return () => window.removeEventListener("click", close);
-    }
-  }, [openMenuId]);
+    if (!accountOpen && openMenuId === null) return;
+    const close = () => {
+      setAccountOpen(false);
+      setOpenMenuId(null);
+    };
+    window.addEventListener("click", close);
+    return () => window.removeEventListener("click", close);
+  }, [accountOpen, openMenuId]);
 
   function authHeaders() {
     return { Authorization: `Bearer ${getToken()}` };
   }
-// 
+
   /**
    * Takes the last segment of a pasted link (minus query/fragment), which is
-   * the share id. A bare name also works for canvases you're already in, but
-   * can no longer be used to join.
+   * the share id. A bare name also works for canvases you're already in.
    */
   function slugFromInput(value: string) {
     const trimmed = value.trim().split(/[?#]/)[0] ?? "";
@@ -197,9 +226,8 @@ export function Dashboard() {
     }
   }
 
-  async function handleDelete(id: number) {
-    const room = rooms.find((r) => r.id === id) ?? null;
-    setDeleteTarget(room);
+  function handleDelete(id: number) {
+    setDeleteTarget(rooms.find((r) => r.id === id) ?? null);
   }
 
   async function confirmDelete() {
@@ -208,8 +236,7 @@ export function Dashboard() {
     setDeleteTarget(null);
 
     // Where it was, not just that it was: restoring a rolled-back delete by
-    // appending would silently reorder the list, and the person would be left
-    // wondering whether something else had changed too.
+    // appending would silently reorder the list.
     const index = rooms.findIndex((r) => r.id === room.id);
     setRooms((r) => r.filter((existing) => existing.id !== room.id));
 
@@ -217,7 +244,7 @@ export function Dashboard() {
       await axios.delete(`${API}/room/${room.id}`, { headers: authHeaders() });
     } catch (err) {
       setRooms((r) => {
-        if (r.some((existing) => existing.id === room.id)) return r; // already back
+        if (r.some((existing) => existing.id === room.id)) return r;
         const restored = [...r];
         restored.splice(Math.max(0, index), 0, room);
         return restored;
@@ -235,8 +262,6 @@ export function Dashboard() {
     const wanted = renameSlug.trim();
     const previous = target.slug;
 
-    // Show it renamed and get out of the way. Keeping the dialog open behind
-    // a spinner makes a rename feel like a transaction; it is a rename.
     setRooms((r) => r.map((room) => (room.id === target.id ? { ...room, slug: wanted } : room)));
     setRenameTarget(null);
     setRenameSlug("");
@@ -248,8 +273,6 @@ export function Dashboard() {
         { slug: wanted },
         { headers: authHeaders() }
       );
-      // reconcile with what the server actually stored rather than assuming
-      // it took our string verbatim - it may normalise it
       if (res.data?.slug && res.data.slug !== wanted) {
         setRooms((r) => r.map((room) => (room.id === target.id ? { ...room, slug: res.data.slug } : room)));
       }
@@ -261,14 +284,13 @@ export function Dashboard() {
     }
   }
 
-  async function handleShare(room: Room) {
-    const url = `${window.location.origin}/canvas/${room.shareId}`;
+  async function handleShare(item: { id: number; shareId: string }) {
+    const url = `${window.location.origin}/canvas/${item.shareId}`;
     try {
       await navigator.clipboard.writeText(url);
-      setCopiedId(room.id);
-      setTimeout(() => setCopiedId((c) => (c === room.id ? null : c)), 1500);
+      setCopiedId(item.id);
+      setTimeout(() => setCopiedId((c) => (c === item.id ? null : c)), 1500);
     } catch {
-      // clipboard unavailable (insecure origin or denied): show the link to copy by hand
       notify(`Copy this link: ${url}`, "info");
     }
   }
@@ -278,111 +300,245 @@ export function Dashboard() {
     router.push("/signin");
   }
 
+  function toggleTheme() {
+    // a plain two-state switch on top of the browser preference, as asked:
+    // "Switch to light" when dark, "Switch to dark" when light
+    setChoice(theme === "dark" ? "light" : "dark");
+  }
+
   const formatDate = (iso: string) =>
-    new Date(iso).toLocaleDateString(undefined, {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-    });
+    new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+
+  // owned + joined, flattened, then filtered and searched for the one grid
+  const items = useMemo<Item[]>(() => {
+    const owned: Item[] = rooms.map((r) => ({
+      id: r.id,
+      slug: r.slug,
+      shareId: r.shareId,
+      date: r.createdAt,
+      shared: false,
+    }));
+    const joined: Item[] = joinedRooms.map((r) => ({
+      id: r.id,
+      slug: r.slug,
+      shareId: r.shareId,
+      date: r.joinedAt ?? r.createdAt,
+      shared: true,
+      owner: r.owner,
+      ownerAvatar: r.ownerAvatar,
+    }));
+    const base = filter === "yours" ? owned : filter === "shared" ? joined : [...owned, ...joined];
+
+    const q = query.trim().toLowerCase();
+    if (!q) return base;
+    return base
+      .map((it) => ({ it, score: matchScore(it, q) }))
+      .filter((x) => x.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .map((x) => x.it);
+  }, [rooms, joinedRooms, filter, query]);
+
+  const hasBoards = rooms.length > 0 || joinedRooms.length > 0;
+  const noun = (n: number) => (n === 1 ? "whiteboard" : "whiteboards");
 
   return (
     <div className="pu">
-      {/* Top bar: a strip of copy paper pinned across the board */}
+      {/* Top bar: wordmark, search, account */}
       <header className="pu-top">
         <div className="pu-wrap">
-          <div className="pu-strip">
-            <h1 className="pu-wordmark">My Canvases</h1>
-            <div className="pu-strip-end">
-              {/* The avatar is the way into the picker. Nothing else on this
-                  page is about the account itself, so a settings screen for one
-                  choice would be a page nobody would find. */}
-              {me && (
+          <div className="pu-bar">
+            <span className="pu-wordmark">ExcaliDraw</span>
+
+            <div className="pu-search">
+              <Search aria-hidden="true" />
+              <input
+                type="search"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search your whiteboards"
+                aria-label="Search your whiteboards"
+              />
+              {query && (
                 <button
                   type="button"
-                  onClick={() => setPickingAvatar(true)}
-                  title="Change your avatar"
+                  className="pu-search-clear"
+                  aria-label="Clear search"
+                  onClick={() => setQuery("")}
+                >
+                  <X aria-hidden="true" />
+                </button>
+              )}
+            </div>
+
+            {me && (
+              <div className="pu-menu-wrap">
+                <button
+                  type="button"
                   className="pu-me"
+                  aria-haspopup="menu"
+                  aria-expanded={accountOpen}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setAccountOpen((o) => !o);
+                    setOpenMenuId(null);
+                  }}
                 >
                   <Avatar id={me.avatar} username={me.username} size={34} />
                   <span className="pu-me-name">{me.username}</span>
+                  <ChevronDown className="pu-me-chev" aria-hidden="true" />
                 </button>
-              )}
-              <button type="button" onClick={handleLogout} className="pu-link">
-                <LogOut aria-hidden="true" />
-                Sign out
-              </button>
-            </div>
+
+                {accountOpen && (
+                  <div className="pu-menu" role="menu" onClick={(e) => e.stopPropagation()}>
+                    <div className="pu-menu-head">
+                      <Avatar id={me.avatar} username={me.username} size={36} />
+                      <div className="pu-menu-head-t">
+                        <b>{me.username}</b>
+                        <span>{me.isGuest ? "Guest account" : me.email ?? "Signed in"}</span>
+                      </div>
+                    </div>
+                    <div className="pu-menu-sep" />
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="pu-menu-item"
+                      onClick={() => {
+                        setPickingAvatar(true);
+                        setAccountOpen(false);
+                      }}
+                    >
+                      <UserRound aria-hidden="true" />
+                      Change avatar
+                    </button>
+                    {me.isGuest && (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="pu-menu-item"
+                        onClick={() => {
+                          setClaiming(true);
+                          setAccountOpen(false);
+                        }}
+                      >
+                        <UserPlus aria-hidden="true" />
+                        Claim your account
+                        <span className="pu-menu-tag">Guest</span>
+                      </button>
+                    )}
+                    <div className="pu-menu-sep" />
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="pu-menu-item"
+                      onClick={() => {
+                        toggleTheme();
+                        setAccountOpen(false);
+                      }}
+                    >
+                      {theme === "dark" ? <Sun aria-hidden="true" /> : <Moon aria-hidden="true" />}
+                      {theme === "dark" ? "Switch to light" : "Switch to dark"}
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="pu-menu-item"
+                      onClick={handleLogout}
+                    >
+                      <LogOut aria-hidden="true" />
+                      Sign out
+                    </button>
+                    <div className="pu-menu-sep" />
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="pu-menu-item pu-menu-item--danger"
+                      onClick={() => {
+                        setDeletingAccount(true);
+                        setAccountOpen(false);
+                      }}
+                    >
+                      <Trash2 aria-hidden="true" />
+                      Delete account
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </header>
 
       <main className="pu-wrap pu-main">
-        {me?.isGuest && (
-          <ClaimAccountBanner
-            username={me.username}
-            onClaimed={() => setMe({ ...me, isGuest: false })}
-          />
-        )}
-
-        {/* Heading row */}
+        {/* Heading */}
         <div className="pu-head">
           <div className="pu-head-title">
-            <h2 className="pu-poster">Your work</h2>
+            <h1 className="pu-title">Whiteboards</h1>
             {!isLoading && !errorMsg && (
-              <p className="pu-count">
-                <span className="num">{rooms.length}</span>
-                {rooms.length === 1 ? "canvas" : "canvases"}
-              </p>
+              <span className="pu-count">
+                {items.length} {noun(items.length)}
+              </span>
             )}
+          </div>
+        </div>
+
+        {/* Controls: filter, join, new */}
+        <div className="pu-controls">
+          <div className="pu-seg" role="tablist" aria-label="Filter whiteboards">
+            {(
+              [
+                ["all", "All"],
+                ["yours", "Yours"],
+                ["shared", "Shared with you"],
+              ] as [Filter, string][]
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                role="tab"
+                aria-selected={filter === value}
+                onClick={() => setFilter(value)}
+              >
+                {label}
+              </button>
+            ))}
           </div>
 
           <div className="pu-actions">
-            {/* Paste a link someone shared, or type the canvas name */}
-            <form onSubmit={handleJoin} className="pu-join">
-              <div className="pu-join-field">
+            <form onSubmit={handleJoin} className="pu-join-wrap">
+              <div className="pu-join">
                 <input
                   value={joinInput}
                   onChange={(e) => {
                     setJoinInput(e.target.value);
                     setJoinError(null);
                   }}
-                  placeholder="Paste a canvas link"
-                  aria-label="Canvas link"
+                  placeholder="Paste a link to join…"
+                  aria-label="Join by link"
                   aria-invalid={joinError ? true : undefined}
                   aria-describedby={joinError ? "join-error" : undefined}
-                  className="pu-input"
                 />
-                {joinError && (
-                  <p id="join-error" className="pu-slip">
-                    {joinError}
-                  </p>
-                )}
+                <button type="submit" disabled={isJoining || joinInput.trim() === ""} aria-busy={isJoining || undefined}>
+                  {isJoining ? "Joining…" : "Join"}
+                </button>
               </div>
-              <button
-                type="submit"
-                disabled={isJoining || joinInput.trim() === ""}
-                aria-busy={isJoining || undefined}
-                className="pu-btn"
-              >
-                <Users aria-hidden="true" />
-                {isJoining ? "Joining…" : "Join"}
-              </button>
+              {joinError && (
+                <p id="join-error" className="pu-slip">
+                  {joinError}
+                </p>
+              )}
             </form>
 
-            <button
-              type="button"
-              onClick={() => setIsCreateOpen(true)}
-              className="pu-btn pu-btn--primary"
-            >
+            <button type="button" onClick={() => setIsCreateOpen(true)} className="pu-btn pu-btn--primary">
               <Plus aria-hidden="true" />
-              New canvas
+              New whiteboard
             </button>
           </div>
         </div>
 
+        {/* Grid */}
         {isLoading ? (
-          <ul className="pu-grid" aria-label="Loading canvases" aria-busy="true">
-            {[...Array(6)].map((_, i) => (
+          <ul className="pu-grid" aria-label="Loading whiteboards" aria-busy="true">
+            {[...Array(8)].map((_, i) => (
               <li key={i} className="pu-skel" />
             ))}
           </ul>
@@ -390,114 +546,130 @@ export function Dashboard() {
           <div className="pu-notice pu-notice--error" role="alert">
             {errorMsg}
           </div>
-        ) : rooms.length === 0 ? (
+        ) : !hasBoards ? (
           <div className="pu-notice">
-            <h3>No canvases yet</h3>
-            <p>Create your first canvas to start drawing.</p>
-            <button
-              type="button"
-              onClick={() => setIsCreateOpen(true)}
-              className="pu-btn"
-            >
+            <h3>No whiteboards yet</h3>
+            <p>Create your first whiteboard to start drawing, or paste a link to join one.</p>
+            <button type="button" onClick={() => setIsCreateOpen(true)} className="pu-btn pu-btn--primary">
               <Plus aria-hidden="true" />
-              New canvas
+              New whiteboard
             </button>
+          </div>
+        ) : items.length === 0 ? (
+          <div className="pu-notice">
+            <h3>Nothing matches</h3>
+            <p>
+              {query
+                ? `No whiteboards match "${query.trim()}".`
+                : filter === "shared"
+                  ? "No one has shared a whiteboard with you yet."
+                  : "You don't own any whiteboards yet."}
+            </p>
           </div>
         ) : (
           <ul className="pu-grid">
-            {rooms.map((room) => (
-              <li key={room.id} className="pu-sheet">
+            {items.map((item) => (
+              <li key={`${item.shared ? "s" : "o"}-${item.id}`} className="pu-card">
                 <button
                   type="button"
-                  onClick={() => router.push(`/canvas/${room.shareId}`)}
-                  className="pu-sheet-open"
-                  aria-label={`Open ${room.slug}`}
-                >
-                  <span className="pu-sheet-name">{room.slug}</span>
-                </button>
+                  className="pu-card-open"
+                  aria-label={`Open ${item.slug}`}
+                  onClick={() => router.push(`/canvas/${item.shareId}`)}
+                />
 
-                <div className="pu-sheet-foot">
-                  <time className="pu-meta" dateTime={room.createdAt}>
-                    {formatDate(room.createdAt)}
-                  </time>
+                <BoardThumb roomId={item.id} name={item.slug} />
 
-                  <div className="pu-sheet-actions">
-                    <button
-                      type="button"
-                      onClick={() => router.push(`/canvas/${room.shareId}`)}
-                      className="pu-link"
-                    >
-                      Open
-                    </button>
+                {item.shared && (
+                  <span className="pu-card-chip">
+                    <Users aria-hidden="true" />
+                    Shared
+                  </span>
+                )}
 
-                    {/* Per-sheet menu */}
-                    <div className="pu-menu-wrap">
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setOpenMenuId(openMenuId === room.id ? null : room.id);
-                        }}
-                        className="pu-icon-btn"
-                        aria-label="More options"
-                        aria-haspopup="menu"
-                        aria-expanded={openMenuId === room.id}
-                      >
-                        <MoreVertical aria-hidden="true" />
-                      </button>
-                      {openMenuId === room.id && (
-                        <div
-                          role="menu"
-                          onClick={(e) => e.stopPropagation()}
-                          className="pu-menu"
-                        >
-                          <button
-                            type="button"
-                            role="menuitem"
-                            onClick={() => {
+                <div className="pu-menu-wrap">
+                  <button
+                    type="button"
+                    className="pu-card-more"
+                    aria-label="More options"
+                    aria-haspopup="menu"
+                    aria-expanded={openMenuId === item.id}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setOpenMenuId(openMenuId === item.id ? null : item.id);
+                      setAccountOpen(false);
+                    }}
+                  >
+                    <MoreVertical aria-hidden="true" />
+                  </button>
+                  {openMenuId === item.id && (
+                    <div className="pu-menu pu-menu--card" role="menu" onClick={(e) => e.stopPropagation()}>
+                      {!item.shared && (
+                        <button
+                          type="button"
+                          role="menuitem"
+                          className="pu-menu-item"
+                          onClick={() => {
+                            const room = rooms.find((r) => r.id === item.id);
+                            if (room) {
                               setRenameTarget(room);
                               setRenameSlug(room.slug);
-                              setOpenMenuId(null);
-                            }}
-                            className="pu-menu-item"
-                          >
-                            <Pencil aria-hidden="true" />
-                            Rename
-                          </button>
-                          <button
-                            type="button"
-                            role="menuitem"
-                            onClick={() => {
-                              handleShare(room);
-                              setOpenMenuId(null);
-                            }}
-                            className="pu-menu-item"
-                          >
-                            {copiedId === room.id ? (
-                              <>
-                                <Check aria-hidden="true" className="pu-copied" />
-                                Copied!
-                              </>
-                            ) : (
-                              <>
-                                <Share2 aria-hidden="true" />
-                                Share link
-                              </>
-                            )}
-                          </button>
-                          <button
-                            type="button"
-                            role="menuitem"
-                            onClick={() => {
-                              handleDelete(room.id);
-                              setOpenMenuId(null);
-                            }}
-                            className="pu-menu-item pu-menu-item--danger"
-                          >
-                            <Trash2 aria-hidden="true" />
-                            Delete
-                          </button>
-                        </div>
+                            }
+                            setOpenMenuId(null);
+                          }}
+                        >
+                          <Pencil aria-hidden="true" />
+                          Rename
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="pu-menu-item"
+                        onClick={() => {
+                          handleShare(item);
+                        }}
+                      >
+                        {copiedId === item.id ? (
+                          <>
+                            <Check aria-hidden="true" className="pu-copied" />
+                            Copied!
+                          </>
+                        ) : (
+                          <>
+                            <Link2 aria-hidden="true" />
+                            Copy link
+                          </>
+                        )}
+                      </button>
+                      {!item.shared && (
+                        <button
+                          type="button"
+                          role="menuitem"
+                          className="pu-menu-item pu-menu-item--danger"
+                          onClick={() => {
+                            handleDelete(item.id);
+                            setOpenMenuId(null);
+                          }}
+                        >
+                          <Trash2 aria-hidden="true" />
+                          Delete
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <div className="pu-card-bar">
+                  <div className="pu-card-bar-t">
+                    <div className="pu-card-name">{item.slug}</div>
+                    <div className="pu-card-sub">
+                      {item.shared ? (
+                        <>
+                          <Avatar id={item.ownerAvatar} username={item.owner} size={14} lazy />
+                          <span>{item.owner ? item.owner : "Shared with you"}</span>
+                        </>
+                      ) : (
+                        <span>{formatDate(item.date)}</span>
                       )}
                     </div>
                   </div>
@@ -506,70 +678,6 @@ export function Dashboard() {
             ))}
           </ul>
         )}
-
-        {/* Rooms belonging to other people, collected by opening their links.
-            No rename or delete here - they are not yours to change. */}
-        {joinedRooms.length > 0 && (
-          <section className="pu-section">
-            <div className="pu-section-head">
-              <h2>Shared with you</h2>
-              <p>Canvases you opened from someone else&apos;s link.</p>
-            </div>
-            <ul className="pu-grid">
-              {joinedRooms.map((room) => (
-                <li key={room.id} className="pu-sheet">
-                  <button
-                    type="button"
-                    onClick={() => router.push(`/canvas/${room.shareId}`)}
-                    className="pu-sheet-open"
-                  >
-                    <span className="pu-sheet-name">{room.slug}</span>
-                    <span className="pu-sheet-owner">
-                      <Avatar
-                        id={room.ownerAvatar}
-                        username={room.owner}
-                        size={22}
-                        lazy
-                      />
-                      <span>{room.owner ? `Owned by ${room.owner}` : "Shared canvas"}</span>
-                    </span>
-                  </button>
-
-                  <div className="pu-sheet-foot">
-                    <span />
-                    <button
-                      type="button"
-                      onClick={() => router.push(`/canvas/${room.shareId}`)}
-                      className="pu-link"
-                    >
-                      Open
-                    </button>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
-
-        {/* Set apart at the foot of the page, deliberately plain and far from
-            Sign out - the two are one slip apart otherwise, and only one of
-            them is reversible. */}
-        <section className="pu-danger">
-          <div>
-            <p className="pu-danger-title">Delete account</p>
-            <p>
-              Removes your account and your canvases. Work you did on other people&rsquo;s
-              canvases stays.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => setDeletingAccount(true)}
-            className="pu-btn pu-btn--danger"
-          >
-            Delete account
-          </button>
-        </section>
       </main>
 
       <ToastStack notices={notices} onDismiss={dismissNotice} />
@@ -584,14 +692,23 @@ export function Dashboard() {
         />
       )}
 
+      {claiming && me && (
+        <ClaimAccountDialog
+          username={me.username}
+          onClaimed={() => {
+            setMe({ ...me, isGuest: false });
+            setClaiming(false);
+          }}
+          onClose={() => setClaiming(false)}
+        />
+      )}
+
       {deletingAccount && (
         <DeleteAccountDialog
           isGuest={me?.isGuest ?? false}
           roomCount={rooms.length}
           onCancel={() => setDeletingAccount(false)}
           onDeleted={() => {
-            // the token now names an account that does not exist, so it has to
-            // go with it - otherwise every later request 401s with no reason
             clearToken();
             router.push("/signin");
           }}
@@ -608,10 +725,9 @@ export function Dashboard() {
         />
       )}
 
-      {/* Create modal */}
       {isCreateOpen && (
         <Modal onClose={() => setIsCreateOpen(false)} labelledBy="create-title">
-          <h3 id="create-title" className="pu-dialog-title">New canvas</h3>
+          <h3 id="create-title" className="pu-dialog-title">New whiteboard</h3>
           <p className="pu-dialog-text">Pick a name. You can rename it later without breaking its share link.</p>
           <form onSubmit={handleCreate}>
             <input
@@ -619,8 +735,8 @@ export function Dashboard() {
               type="text"
               value={newSlug}
               onChange={(e) => setNewSlug(e.target.value)}
-              placeholder="my-cool-canvas"
-              aria-label="Canvas name"
+              placeholder="my-cool-whiteboard"
+              aria-label="Whiteboard name"
               aria-invalid={createError ? true : undefined}
               className="pu-input"
               required
@@ -635,10 +751,9 @@ export function Dashboard() {
         </Modal>
       )}
 
-      {/* Rename modal */}
       {renameTarget && (
         <Modal onClose={() => setRenameTarget(null)} labelledBy="rename-title">
-          <h3 id="rename-title" className="pu-dialog-title">Rename canvas</h3>
+          <h3 id="rename-title" className="pu-dialog-title">Rename whiteboard</h3>
           <p className="pu-dialog-text">The share link stays the same.</p>
           <form onSubmit={handleRename}>
             <input
@@ -646,17 +761,13 @@ export function Dashboard() {
               type="text"
               value={renameSlug}
               onChange={(e) => setRenameSlug(e.target.value)}
-              aria-label="New canvas name"
+              aria-label="New whiteboard name"
               aria-invalid={renameError ? true : undefined}
               className="pu-input"
               required
             />
             {renameError && <p className="pu-error-text">{renameError}</p>}
-            <ModalButtons
-              onCancel={() => setRenameTarget(null)}
-              submitLabel="Save"
-              disabled={false}
-            />
+            <ModalButtons onCancel={() => setRenameTarget(null)} submitLabel="Save" disabled={false} />
           </form>
         </Modal>
       )}
@@ -676,14 +787,13 @@ function Modal({
   labelledBy?: string;
 }) {
   return (
-    <div className="pu-scrim" onClick={onClose}>
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={labelledBy}
-        className="pu-dialog"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <div
+      className="pu-scrim"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div role="dialog" aria-modal="true" aria-labelledby={labelledBy} className="pu-dialog">
         {children}
       </div>
     </div>
@@ -704,11 +814,7 @@ function ModalButtons({
       <button type="button" onClick={onCancel} className="pu-btn">
         Cancel
       </button>
-      <button
-        type="submit"
-        disabled={disabled}
-        className="pu-btn pu-btn--primary"
-      >
+      <button type="submit" disabled={disabled} className="pu-btn pu-btn--primary">
         {submitLabel}
       </button>
     </div>
