@@ -2,6 +2,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { getExistingShapes } from "@/draw/http";
 import { renderShapesToBlob, exportBounds } from "@/draw/exportBoard";
+import { useTheme } from "./ThemeProvider";
 
 /**
  * A board's thumbnail, rendered on the client from its own shapes.
@@ -16,6 +17,7 @@ import { renderShapesToBlob, exportBounds } from "@/draw/exportBoard";
  * failure, falls back to a plain well, never an error the person has to read.
  */
 export function BoardThumb({ roomId, name }: { roomId: number; name: string }) {
+  const { theme } = useTheme();
   const ref = useRef<HTMLDivElement>(null);
   const [url, setUrl] = useState<string | null>(null);
   // pending while off-screen or rendering; blank once we know there is nothing to show
@@ -38,8 +40,8 @@ export function BoardThumb({ roomId, name }: { roomId: number; name: string }) {
         }
         // target a ~480px long edge so each thumbnail stays a small bitmap
         const scale = Math.min(2, Math.max(0.05, 480 / Math.max(box.width, box.height)));
-        // render on the dark canvas so the preview matches the dark matte card
-        const result = await renderShapesToBlob(shapes, new Map(), scale, "dark");
+        // render in the app's current theme: white preview in light, dark in dark
+        const result = await renderShapesToBlob(shapes, new Map(), scale, theme);
         if (cancelled || !result) {
           setStatus("blank");
           return;
@@ -68,7 +70,7 @@ export function BoardThumb({ roomId, name }: { roomId: number; name: string }) {
       io.disconnect();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [roomId]);
+  }, [roomId, theme]);
 
   return (
     <div
