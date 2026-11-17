@@ -334,7 +334,6 @@ export function Dashboard() {
 
   const hasBoards = rooms.length > 0 || joinedRooms.length > 0;
   const noun = (n: number) => (n === 1 ? "whiteboard" : "whiteboards");
-  const activeTitle = FILTERS.find((f) => f.value === filter)!.title;
 
   return (
     <div className="pu">
@@ -419,7 +418,14 @@ export function Dashboard() {
 
       {/* Body: toolbar + content */}
       <div className="pu-body">
-        <div className="pu-toolbar">
+        <header className="pu-header">
+          <div className="pu-head">
+            <h1 className="pu-title">Drawings</h1>
+            {!isLoading && !errorMsg && (
+              <span className="pu-count">{items.length} {noun(items.length)}</span>
+            )}
+          </div>
+          <div className="pu-toolbar">
           <div className="pu-search">
             <Search aria-hidden="true" />
             <input
@@ -459,15 +465,10 @@ export function Dashboard() {
               New whiteboard
             </button>
           </div>
-        </div>
+          </div>
+        </header>
 
         <main className="pu-main">
-          <div className="pu-head">
-            <h1 className="pu-title">{activeTitle}</h1>
-            {!isLoading && !errorMsg && (
-              <span className="pu-count">{items.length} {noun(items.length)}</span>
-            )}
-          </div>
 
           {isLoading ? (
             <ul className="pu-grid" aria-label="Loading whiteboards" aria-busy="true">
