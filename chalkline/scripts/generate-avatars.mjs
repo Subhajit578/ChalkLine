@@ -29,7 +29,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const SVG_DIR = join(ROOT, "apps/excalidrawfe/public/avatars");
+const SVG_DIR = join(ROOT, "apps/web/public/avatars");
 const MANIFEST = join(ROOT, "packages/common/src/avatars.ts");
 
 /** How many faces per style. 6 styles x 12 fills a picker grid without scrolling far. */

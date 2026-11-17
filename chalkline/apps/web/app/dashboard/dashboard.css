@@ -1,4 +1,4 @@
-/* ExcaliDraw dashboard — clean, near-monochrome, flat (no gradients).
+/* ChalkLine dashboard — clean, near-monochrome, flat (no gradients).
  * Sidebar shell (wordmark top, account bottom) + a fluid, full-width content
  * area. Tokens live on :root so the dialogs (rendered inside .pu) inherit
  * them; light is the default, dark follows the app theme attribute, then the

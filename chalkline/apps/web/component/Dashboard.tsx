@@ -340,7 +340,7 @@ export function Dashboard() {
       {/* Sidebar: wordmark, filter nav, account at the foot */}
       <aside className="pu-side">
         <div className="pu-side-top">
-          <span className="pu-wordmark">ExcaliDraw</span>
+          <span className="pu-wordmark">ChalkLine</span>
           {me && (
             <button
               type="button"

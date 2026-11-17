@@ -69,7 +69,7 @@ function App() {
               <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center">
                 <Pen className="w-5 h-5 text-white" />
               </div>
-              <span className="text-xl font-bold text-gray-900">ExcaliDraw</span>
+              <span className="text-xl font-bold text-gray-900">ChalkLine</span>
             </div>
             <div className="hidden md:flex items-center space-x-8">
               <a href="#features" className="text-gray-600 hover:text-gray-900 transition-colors">Features</a>
@@ -185,7 +185,7 @@ function App() {
               </h2>
               <p className="text-xl text-gray-600 mb-8 leading-relaxed">
                 Whether you&rsquo;re a designer, developer, educator, or entrepreneur,
-                ExcaliDraw adapts to your creative process.
+                ChalkLine adapts to your creative process.
               </p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {useCases.map((useCase, index) => (
@@ -226,7 +226,7 @@ function App() {
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             <button className="bg-white text-blue-600 px-8 py-4 rounded-lg text-lg font-semibold hover:bg-gray-50 transition-all duration-200 transform hover:scale-105">
-              Launch ExcaliDraw
+              Launch ChalkLine
             </button>
             <button className="border border-white text-white px-8 py-4 rounded-lg text-lg font-semibold hover:bg-white/10 transition-all duration-200">
               Learn More
@@ -244,7 +244,7 @@ function App() {
                 <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center">
                   <Pen className="w-5 h-5 text-white" />
                 </div>
-                <span className="text-xl font-bold">ExcaliDraw</span>
+                <span className="text-xl font-bold">ChalkLine</span>
               </div>
               <p className="text-gray-400 leading-relaxed max-w-md">
                 The open-source virtual whiteboard for sketching hand-drawn like diagrams. 
@@ -274,7 +274,7 @@ function App() {
             </div>
           </div>
           <div className="border-t border-gray-800 mt-8 pt-8 text-center text-gray-400">
-            <p>&copy; 2025 ExcaliDraw. Open source and free forever.</p>
+            <p>&copy; 2025 ChalkLine. Open source and free forever.</p>
           </div>
         </div>
       </footer>

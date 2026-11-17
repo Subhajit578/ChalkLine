@@ -1,5 +1,5 @@
 {
-  "name": "excalidrawe2e",
+  "name": "chalkline",
   "private": true,
   "scripts": {
     "build": "turbo run build",
