@@ -185,7 +185,8 @@ html:has(.pu), body:has(.pu) { margin: 0; background: var(--pu-surface); }
   flex: 1; display: flex; align-items: center; gap: 10px; max-width: 560px; height: 40px; padding: 0 14px;
   background: var(--pu-sunken); border: 1px solid var(--pu-border); border-radius: var(--pu-r-sm);
 }
-.pu-search:focus-within { border-color: var(--pu-accent); outline: 2px solid var(--pu-accent); outline-offset: -2px; }
+.pu-search:focus-within { border-color: var(--pu-accent); box-shadow: 0 0 0 3px var(--pu-accent-quiet); }
+.pu-search input:focus-visible { outline: none; }
 .pu-search svg { width: 18px; height: 18px; color: var(--pu-ink-muted); flex: none; }
 .pu-search input { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--pu-ink); font: 400 15px/1 var(--pu-font-sans); outline: none; }
 .pu-search input::placeholder { color: var(--pu-ink-faint); }
@@ -198,7 +199,8 @@ html:has(.pu), body:has(.pu) { margin: 0; background: var(--pu-surface); }
 
 /* join field */
 .pu-join { display: flex; align-items: center; height: 40px; background: var(--pu-sunken); border: 1px solid var(--pu-border); border-radius: var(--pu-r-sm); overflow: hidden; }
-.pu-join:focus-within { border-color: var(--pu-accent); }
+.pu-join:focus-within { border-color: var(--pu-accent); box-shadow: 0 0 0 3px var(--pu-accent-quiet); }
+.pu-join input:focus-visible { outline: none; }
 .pu-join input { width: 200px; height: 100%; border: 0; background: transparent; padding: 0 12px; color: var(--pu-ink); font: 400 14px/1 var(--pu-font-sans); outline: none; }
 .pu-join input::placeholder { color: var(--pu-ink-faint); }
 .pu-join button { height: 100%; padding: 0 14px; border: 0; border-left: 1px solid var(--pu-border); background: transparent; color: var(--pu-ink); font: 500 13px/1 var(--pu-font-sans); cursor: pointer; white-space: nowrap; }
