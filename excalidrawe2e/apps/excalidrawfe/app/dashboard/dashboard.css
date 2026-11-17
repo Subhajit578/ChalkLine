@@ -8,17 +8,17 @@
  */
 
 :root {
-  --pu-surface: #fcfcfb;
+  --pu-surface: #f1f3f6;
   --pu-raised: #ffffff;
-  --pu-sunken: #f3f3f1;
-  --pu-border: #e7e6e2;
-  --pu-border-strong: #d3d2cd;
-  --pu-ink: #1b1c1e;
-  --pu-ink-muted: #63646a;
-  --pu-ink-faint: #8a8b8f;
-  --pu-accent: #1a73e8;
+  --pu-sunken: #eceef2;
+  --pu-border: #e0e3e9;
+  --pu-border-strong: #c6cad2;
+  --pu-ink: #181a1f;
+  --pu-ink-muted: #585c66;
+  --pu-ink-faint: #868b95;
+  --pu-accent: #0f766e;
   --pu-on-accent: #ffffff;
-  --pu-accent-quiet: #e8f0fe;
+  --pu-accent-quiet: #d4f1ea;
   --pu-danger: #c7362b;
   --pu-on-danger: #ffffff;
   --pu-danger-quiet: #fbeae8;
@@ -31,9 +31,9 @@
   --pu-r-lg: 16px;
   --pu-r-pill: 999px;
 
-  --pu-shadow-sm: 0 1px 2px rgba(17, 19, 23, 0.06);
-  --pu-shadow-card: 0 1px 2px rgba(17, 19, 23, 0.06), 0 8px 20px rgba(17, 19, 23, 0.08);
-  --pu-shadow-pop: 0 8px 16px rgba(17, 19, 23, 0.10), 0 2px 6px rgba(17, 19, 23, 0.08);
+  --pu-shadow-sm: 0 1px 2px rgba(16, 18, 27, 0.08), 0 1px 1px rgba(16, 18, 27, 0.04);
+  --pu-shadow-card: 0 2px 4px rgba(16, 18, 27, 0.08), 0 12px 24px -8px rgba(16, 18, 27, 0.16);
+  --pu-shadow-pop: 0 8px 16px rgba(17, 19, 23, 0.12), 0 2px 6px rgba(17, 19, 23, 0.08);
   --pu-shadow-dialog: 0 24px 48px rgba(17, 19, 23, 0.20), 0 8px 16px rgba(17, 19, 23, 0.12);
 
   --pu-dur: 160ms;
@@ -54,9 +54,9 @@
   --pu-ink: #f3f2ef;
   --pu-ink-muted: #a9abb0;
   --pu-ink-faint: #767981;
-  --pu-accent: #8ab4f8;
-  --pu-on-accent: #0a1b33;
-  --pu-accent-quiet: #1c2b44;
+  --pu-accent: #2dd4bf;
+  --pu-on-accent: #04231f;
+  --pu-accent-quiet: #123a34;
   --pu-danger: #f0776b;
   --pu-on-danger: #2a0d0a;
   --pu-danger-quiet: #34140f;
@@ -269,7 +269,10 @@ html:has(.pu), body:has(.pu) { margin: 0; background: var(--pu-surface); }
 
 .pu-card-bar {
   position: absolute; left: 0; right: 0; bottom: 0; display: flex; align-items: center; gap: 8px;
-  padding: 9px 12px; background: var(--pu-raised); border-top: 1px solid var(--pu-border);
+  padding: 9px 12px;
+  /* each board gets a soft colour keyed to it (--card-accent, set per card) */
+  background: color-mix(in oklab, var(--card-accent, var(--pu-border)) 10%, var(--pu-raised));
+  border-top: 2px solid color-mix(in oklab, var(--card-accent, var(--pu-border)) 62%, var(--pu-raised));
   border-bottom-left-radius: var(--pu-r-md); border-bottom-right-radius: var(--pu-r-md);
   pointer-events: none;
 }
