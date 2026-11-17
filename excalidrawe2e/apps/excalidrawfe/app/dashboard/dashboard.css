@@ -25,14 +25,14 @@
   --pu-success: #0f7a4e;
   --pu-scrim: rgba(27, 28, 30, 0.55);
 
-  /* board card — dark matte in BOTH themes (the bright board preview pops on a dark card) */
+  /* board card — constant dark matte in both themes; only the thumbnail follows the theme (WHITE in light) */
   --pu-card-bg: linear-gradient(180deg, #262a31 0%, #14161a 100%);
   --pu-card-border: #2c3139;
   --pu-card-hover-border: #3a4049;
   --pu-card-ink: #f3f4f6;
   --pu-card-sub: #9aa4b0;
-  --pu-card-thumb: #0b0c0f;
-  --pu-card-thumb-border: rgba(255, 255, 255, 0.07);
+  --pu-card-thumb: #ffffff;
+  --pu-card-thumb-border: transparent;
   --pu-skel-piece: rgba(255, 255, 255, 0.12);
 
   --pu-r-xs: 6px;
