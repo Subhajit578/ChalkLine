@@ -79,6 +79,14 @@ const FILTERS: { value: Filter; nav: string; title: string }[] = [
   { value: "shared", nav: "Shared with you", title: "Shared with you" },
 ];
 
+/** A curated, non-garish palette so each board card carries its own colour. */
+const CARD_COLORS = ["#0ea5e9", "#06b6d4", "#10b981", "#22c55e", "#84cc16", "#f59e0b", "#f97316", "#f43f5e", "#6366f1"];
+function cardColor(name: string): string {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  return CARD_COLORS[h % CARD_COLORS.length];
+}
+
 export function Dashboard() {
   const router = useRouter();
   const { theme, setChoice } = useTheme();
@@ -492,7 +500,11 @@ export function Dashboard() {
           ) : (
             <ul className="pu-grid">
               {items.map((item) => (
-                <li key={`${item.shared ? "s" : "o"}-${item.id}`} className="pu-card">
+                <li
+                  key={`${item.shared ? "s" : "o"}-${item.id}`}
+                  className="pu-card"
+                  style={{ "--card-accent": cardColor(item.slug) } as React.CSSProperties}
+                >
                   <button
                     type="button"
                     className="pu-card-open"
