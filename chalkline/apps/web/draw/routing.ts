@@ -82,3 +82,11 @@ export function simplifyStroke(points: Point[], tolerance: number): Point[] {
 
   return points.filter((_, i) => keep[i] === 1);
 }
+
+export type Edge = "top" | "bottom" | "left" | "right";
+
+/** The viewport edge closest to a point: where a dropped toolbar docks, since it never floats mid-screen. */
+export function nearestEdge(x: number, y: number, width: number, height: number): Edge {
+  const options: [Edge, number][] = [["top", y], ["bottom", height - y], ["left", x], ["right", width - x]];
+  return options.reduce((best, next) => (next[1] < best[1] ? next : best))[0];
+}

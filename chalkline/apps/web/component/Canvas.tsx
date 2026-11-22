@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { IconButton } from "./IconButton";
 import {
   Circle,
@@ -21,8 +21,11 @@ import {
   Compass,
   Grid2x2,
   FileDown,
+  GripVertical,
+  GripHorizontal,
 } from "lucide-react";
 import { Game, TextRequest } from "@/draw/Game";
+import { nearestEdge, type Edge } from "@/draw/routing";
 import TextOverlay from "./TextOverlay";
 import { makeNotice, ToastStack, type Notice } from "./Toast";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -477,6 +480,7 @@ export function Canvas({
         onToggleGrid={() => game?.toggleGrid()}
         themeChoice={choice}
         onCycleTheme={cycle}
+        viewport={size}
       />
     </div>
   );
@@ -506,6 +510,7 @@ function TopBar({
   onToggleGrid,
   themeChoice,
   onCycleTheme,
+  viewport,
 }: {
   selectedTool: Tool;
   setSelectedTool: (s: Tool) => void;
@@ -524,8 +529,47 @@ function TopBar({
   onToggleGrid: () => void;
   themeChoice: ThemeChoice;
   onCycleTheme: () => void;
+  viewport: { w: number; h: number };
 }) {
   const { theme } = useTheme();
+
+  // Docked to an edge, never free-floating: a row along the top or bottom, a
+  // column down a side, `offset` px along that edge. Same buttons, same order.
+  const [dock, setDock] = useState<{ edge: Edge; offset: number }>({ edge: "top", offset: DOCK_MARGIN });
+  const [dragAt, setDragAt] = useState<{ x: number; y: number } | null>(null);
+  const barRef = useRef<HTMLDivElement>(null);
+  const grab = useRef({ dx: 0, dy: 0, x: 0, y: 0 });
+  const vertical = dock.edge === "left" || dock.edge === "right";
+
+  // Its length changes with orientation, so the offset can only be kept on
+  // screen once it is laid out - after a re-dock or a window resize.
+  useLayoutEffect(() => {
+    const r = barRef.current?.getBoundingClientRect();
+    if (!r || dragAt) return;
+    const length = vertical ? r.height : r.width;
+    const span = vertical ? window.innerHeight : window.innerWidth;
+    const offset = Math.max(DOCK_MARGIN, Math.min(dock.offset, span - length - DOCK_MARGIN));
+    if (offset !== dock.offset) setDock({ edge: dock.edge, offset });
+  }, [dock, dragAt, vertical, viewport.w, viewport.h]);
+
+  function onGripDown(e: ReactPointerEvent<HTMLButtonElement>) {
+    const r = barRef.current!.getBoundingClientRect();
+    grab.current = { dx: e.clientX - r.left, dy: e.clientY - r.top, x: e.clientX, y: e.clientY };
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setDragAt({ x: r.left, y: r.top });
+  }
+  function onGripMove(e: ReactPointerEvent<HTMLButtonElement>) {
+    if (dragAt) setDragAt({ x: e.clientX - grab.current.dx, y: e.clientY - grab.current.dy });
+  }
+  function onGripUp(e: ReactPointerEvent<HTMLButtonElement>) {
+    if (!dragAt) return;
+    setDragAt(null);
+    const g = grab.current;
+    // a click, not a drag: near a corner the nearest edge would be a coin toss
+    if (Math.hypot(e.clientX - g.x, e.clientY - g.y) < 4) return;
+    const edge = nearestEdge(e.clientX, e.clientY, window.innerWidth, window.innerHeight);
+    setDock({ edge, offset: edge === "top" || edge === "bottom" ? dragAt.x : dragAt.y });
+  }
   const palette = THEMES[theme];
   const iconProps = {
     color: palette.panelMuted,
@@ -535,11 +579,25 @@ function TopBar({
 
   return (
     <div
+      ref={barRef}
       style={{
         position: "fixed",
-        top: 10,
-        left: 10,
+        ...(dragAt
+          ? { left: dragAt.x, top: dragAt.y }
+          : dock.edge === "top"
+            ? { top: DOCK_MARGIN, left: dock.offset }
+            : dock.edge === "bottom"
+              ? { bottom: DOCK_MARGIN, left: dock.offset }
+              : dock.edge === "left"
+                ? { left: DOCK_MARGIN, top: dock.offset }
+                : { right: DOCK_MARGIN, top: dock.offset }),
         display: "flex",
+        flexDirection: vertical ? "column" : "row",
+        // every tool in a column is taller than a laptop screen: scroll, never clip
+        maxHeight: vertical ? `calc(100vh - ${DOCK_MARGIN * 2}px)` : undefined,
+        overflowY: vertical ? "auto" : undefined,
+        // above the bottom-centre "scroll back" pill (20) when docked at the bottom
+        zIndex: 30,
         gap: 12,
         background: palette.panel,
         border: `1px solid ${palette.panelBorder}`,
@@ -550,8 +608,36 @@ function TopBar({
         alignItems: "center",
       }}
     >
+      <button
+        type="button"
+        aria-label="Move the toolbar: drag it to any edge, or press an arrow key"
+        title="Drag to move the toolbar"
+        onPointerDown={onGripDown}
+        onPointerMove={onGripMove}
+        onPointerUp={onGripUp}
+        onPointerCancel={() => setDragAt(null)}
+        onKeyDown={(e) => {
+          const edge = ARROW_EDGE[e.key];
+          if (edge) {
+            e.preventDefault();
+            setDock({ edge, offset: dock.offset });
+          }
+        }}
+        style={{
+          display: "flex",
+          padding: 2,
+          background: "transparent",
+          border: "none",
+          color: palette.panelMuted,
+          cursor: dragAt ? "grabbing" : "grab",
+          touchAction: "none",
+        }}
+      >
+        {vertical ? <GripHorizontal size={16} /> : <GripVertical size={16} />}
+      </button>
+
       {/* Tools */}
-      <div style={{ display: "flex", gap: 4 }}>
+      <div style={{ display: "flex", flexDirection: vertical ? "column" : "row", gap: 4 }}>
         <IconButton
           onClick={() => setSelectedTool("pencil")}
           activated={selectedTool === "pencil"}
@@ -624,10 +710,10 @@ function TopBar({
         />
       </div>
 
-      <Divider color={palette.panelBorder} />
+      <Divider color={palette.panelBorder} vertical={vertical} />
 
       {/* Colours: names, drawn in this theme's version of each */}
-      <div style={{ display: "flex", gap: 6 }}>
+      <div style={{ display: "flex", flexDirection: vertical ? "column" : "row", gap: 6 }}>
         {COLOR_NAMES.map((name) => (
           <button
             key={name}
@@ -652,12 +738,12 @@ function TopBar({
         ))}
       </div>
 
-      <Divider color={palette.panelBorder} />
+      <Divider color={palette.panelBorder} vertical={vertical} />
 
       {/* On an infinite canvas being lost is a real state, and the only clue
           that you are is the zoom. The readout is the reset button, so the
           way out is where you were already looking. */}
-      <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+      <div style={{ display: "flex", flexDirection: vertical ? "column" : "row", alignItems: "center", gap: 2 }}>
         <IconButton
           onClick={onZoomOut}
           activated={false}
@@ -699,7 +785,7 @@ function TopBar({
         />
       </div>
 
-      <Divider color={palette.panelBorder} />
+      <Divider color={palette.panelBorder} vertical={vertical} />
 
       <IconButton
         onClick={onToggleGrid}
@@ -747,6 +833,10 @@ function TopBar({
   );
 }
 
-function Divider({ color }: { color: string }) {
-  return <div style={{ width: 1, height: 24, background: color }} />;
+const DOCK_MARGIN = 10;
+const ARROW_EDGE: Record<string, Edge> = { ArrowUp: "top", ArrowDown: "bottom", ArrowLeft: "left", ArrowRight: "right" };
+
+/** Runs across the bar: an upright rule in a row, a flat one in a column. */
+function Divider({ color, vertical }: { color: string; vertical: boolean }) {
+  return <div style={vertical ? { width: 24, height: 1, background: color } : { width: 1, height: 24, background: color }} />;
 }

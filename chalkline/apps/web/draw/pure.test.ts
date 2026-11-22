@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { simplifyStroke } from "./routing.ts";
+import { simplifyStroke, nearestEdge } from "./routing.ts";
 import { isDrawable } from "./shapeGuard.ts";
 
 test("simplifyStroke drops points on a straight run and keeps the ends", () => {
@@ -69,4 +69,13 @@ test("isDrawable accepts every shape type and refuses what would break a repaint
     { id: "1", type: "hexagon" },
   ];
   for (const shape of bad) assert.equal(isDrawable(shape), false, JSON.stringify(shape));
+});
+
+test("nearestEdge docks a dropped toolbar to the closest side, never the middle", () => {
+  assert.equal(nearestEdge(500, 10, 1000, 800), "top");
+  assert.equal(nearestEdge(500, 790, 1000, 800), "bottom");
+  assert.equal(nearestEdge(15, 400, 1000, 800), "left");
+  assert.equal(nearestEdge(990, 400, 1000, 800), "right");
+  // dead centre still resolves to an edge
+  assert.ok(["top", "bottom", "left", "right"].includes(nearestEdge(500, 400, 1000, 800)));
 });
