@@ -354,8 +354,8 @@ html:has(.pu), body:has(.pu) { margin: 0; background: var(--pu-surface); }
 .pu-notice .pu-btn { margin-top: 6px; }
 
 /* ---------- avatars ---------- */
-.pu-avatar { display: inline-flex; flex: none; align-items: center; justify-content: center; overflow: hidden; border-radius: var(--pu-r-pill); background: var(--pu-accent-quiet); box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--pu-ink) 10%, transparent); }
-.pu-avatar img { width: 100%; height: 100%; }
+/* shape is in globals.css, shared with the canvas */
+.pu-avatar { background: var(--pu-accent-quiet); box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--pu-ink) 10%, transparent); }
 .pu-avatar-initial { font: 600 1em/1 var(--pu-font-sans); color: var(--pu-accent); }
 
 /* ---------- dialogs ---------- */

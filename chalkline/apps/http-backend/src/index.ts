@@ -665,6 +665,52 @@ app.get("/shapes/:roomId" , isLoggedIn, async (req, res) => {
     }
 })
 /**
+ * Everyone on a board - the owner and every member - with how many of its
+ * shapes each one drew. Not only the people who drew: the canvas marks who is
+ * online from the socket's list of user ids, and anyone in the room can be
+ * online. Owner and members cover every author, because a membership is only
+ * removed along with the account, and that clears the shapes' author too.
+ *
+ * Counts are shapes on the board now: a deleted shape or a cleared board no
+ * longer counts for anyone. Same access rule and 404 as /shapes.
+ */
+app.get("/people/:roomId", isLoggedIn, async (req, res) => {
+    const roomId = Number(req.params.roomId)
+    const userId = req.userId!
+    if (!Number.isInteger(roomId)) {
+        return res.status(404).send({ message: "Invalid Room Id" })
+    }
+    const person = { select: { id: true, username: true, photo: true } }
+    try {
+        // shortcut: sends every member; page it if boards reach thousands of members
+        const [room, counts] = await Promise.all([
+            prismaClient.room.findUnique({
+                where: { id: roomId },
+                select: { adminId: true, admin: person, members: { select: { user: person } } },
+            }),
+            prismaClient.shape.groupBy({
+                by: ["userId"],
+                where: { roomId, userId: { not: null } },
+                _count: { _all: true },
+            }),
+        ])
+        if (!room || (room.adminId !== userId && !room.members.some((m) => m.user.id === userId))) {
+            return res.status(404).send({ message: "Invalid Room Id" })
+        }
+        const shapes = new Map(counts.map((c) => [c.userId, c._count._all]))
+        const people = [room.admin, ...room.members.map((m) => m.user)].map((u) => ({
+            id: u.id,
+            username: u.username,
+            avatar: avatarFor(u.photo, u.id),
+            shapes: shapes.get(u.id) ?? 0,
+        }))
+        return res.send({ people })
+    } catch (err) {
+        console.error("[people] could not load the people on a board", err)
+        return res.status(500).send({ message: "Could not load who is on this board" })
+    }
+})
+/**
  * Joins a room (opening a shared link). Idempotent; the owner is never added
  * as a member. Only the share id creates a membership; a name creates
  * nothing. The canvas page calls this before opening its socket, since the

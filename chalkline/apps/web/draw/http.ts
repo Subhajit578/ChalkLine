@@ -4,6 +4,7 @@ import { getToken } from "@/lib/session";
 import { errorStatus } from "@/lib/errors";
 import { isDrawable } from "./shapeGuard";
 import type { Shape } from "./Game";
+import type { Person } from "./people";
 
 type ShapeRow = {
   id: string;
@@ -35,4 +36,12 @@ export async function getExistingShapes(roomId: string): Promise<Shape[]> {
     console.warn(`[canvas] left out ${shapes.length - drawable.length} stored shape(s) that could not be drawn`);
   }
   return drawable;
+}
+
+/** The board's owner and members, with how many of its shapes each drew. */
+export async function getPeople(roomId: string): Promise<Person[]> {
+  const res = await axios.get(`${API_URL}/people/${roomId}`, {
+    headers: { Authorization: `Bearer ${getToken()}` },
+  });
+  return res.data.people;
 }

@@ -44,6 +44,7 @@ import { nearestEdge, type Edge } from "@/draw/routing";
 import TextOverlay from "./TextOverlay";
 import { makeNotice, ToastStack, type Notice } from "./Toast";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { BoardPeople } from "./BoardPeople";
 import { saveBoardAsPdf } from "@/lib/pdf";
 import { DEFAULT_FONT_FAMILY, DEFAULT_FONT_SIZE, FONTS } from "@/draw/renderer";
 import type { ConnectionStatus, RoomConnection } from "@/draw/connection";
@@ -122,6 +123,8 @@ export function Canvas({
   // whether any shape is on screen; drives the offer to scroll back
   const [contentVisible, setContentVisible] = useState(true);
   const [gridOn, setGridOn] = useState(true);
+  // where the toolbar sits, so the people stack can stay out from under it
+  const [toolbarRect, setToolbarRect] = useState<DOMRect | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const showNotice = useCallback(
@@ -498,6 +501,8 @@ export function Canvas({
 
       <ToastStack notices={notices} onDismiss={dismissNotice} />
 
+      <BoardPeople roomId={roomId} connection={connection} palette={palette} avoid={toolbarRect} />
+
       <TopBar
         selectedTool={selectedTool}
         setSelectedTool={setSelectedTool}
@@ -519,6 +524,7 @@ export function Canvas({
         themeChoice={choice}
         onCycleTheme={cycle}
         viewport={size}
+        onPlaced={setToolbarRect}
       />
     </div>
   );
@@ -551,6 +557,7 @@ function TopBar({
   themeChoice,
   onCycleTheme,
   viewport,
+  onPlaced,
 }: {
   selectedTool: Tool;
   setSelectedTool: (s: Tool) => void;
@@ -572,6 +579,8 @@ function TopBar({
   themeChoice: ThemeChoice;
   onCycleTheme: () => void;
   viewport: { w: number; h: number };
+  /** where the bar ended up, each time it settles after a move or resize */
+  onPlaced: (rect: DOMRect) => void;
 }) {
   const { theme } = useTheme();
 
@@ -592,7 +601,8 @@ function TopBar({
     const span = vertical ? window.innerHeight : window.innerWidth;
     const offset = Math.max(DOCK_MARGIN, Math.min(dock.offset, span - length - DOCK_MARGIN));
     if (offset !== dock.offset) setDock({ edge: dock.edge, offset });
-  }, [dock, dragAt, vertical, viewport.w, viewport.h]);
+    else onPlaced(r);
+  }, [dock, dragAt, vertical, viewport.w, viewport.h, onPlaced]);
 
   function onGripDown(e: ReactPointerEvent<HTMLButtonElement>) {
     const r = barRef.current!.getBoundingClientRect();

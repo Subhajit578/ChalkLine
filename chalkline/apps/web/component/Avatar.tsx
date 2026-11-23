@@ -33,7 +33,7 @@ export function Avatar({
   const url = avatarUrl(id);
 
   return (
-    // styled by the dashboard stylesheet (.pu-avatar), the only place it renders
+    // shape in globals.css (.pu-avatar); colours from the page showing it
     <span
       className={`pu-avatar ${className}`}
       style={{ width: size, height: size }}

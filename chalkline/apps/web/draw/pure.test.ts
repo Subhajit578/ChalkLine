@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { simplifyStroke, nearestEdge, straightPoints, polygonOf } from "./routing.ts";
 import { isDrawable } from "./shapeGuard.ts";
+import { rankPeople } from "./people.ts";
 
 test("simplifyStroke drops points on a straight run and keeps the ends", () => {
   const line = Array.from({ length: 200 }, (_, i) => ({ x: i, y: i * 2 }));
@@ -93,4 +94,12 @@ test("nearestEdge docks a dropped toolbar to the closest side, never the middle"
   assert.equal(nearestEdge(990, 400, 1000, 800), "right");
   // dead centre still resolves to an edge
   assert.ok(["top", "bottom", "left", "right"].includes(nearestEdge(500, 400, 1000, 800)));
+});
+
+test("rankPeople puts the most shapes first and keeps online people who have not drawn", () => {
+  const person = (id: string, shapes: number) => ({ id, username: id, avatar: "", shapes });
+  const people = [person("cat", 2), person("ann", 0), person("bob", 5), person("dan", 0), person("eve", 2)];
+  const ranked = rankPeople(people, new Set(["dan", "eve"]));
+  // eve beats cat on the tie by being online; ann is neither drawing nor online
+  assert.deepEqual(ranked.map((p) => p.id), ["bob", "eve", "cat", "dan"]);
 });

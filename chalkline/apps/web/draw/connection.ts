@@ -55,6 +55,9 @@ export class RoomConnection {
   private handlers: Handlers | null = null;
   private status: ConnectionStatus = "connecting";
   private statusListener: ((status: ConnectionStatus, message?: string) => void) | null = null;
+  /** user ids in the room, as the server last listed them */
+  private presence: string[] = [];
+  private presenceListener: ((userIds: string[]) => void) | null = null;
 
   /** the room is joined on the current socket */
   private joined = false;
@@ -93,6 +96,12 @@ export class RoomConnection {
   onStatus(listener: ((status: ConnectionStatus, message?: string) => void) | null) {
     this.statusListener = listener;
     listener?.(this.status);
+  }
+
+  /** Subscribe to who is in the room. Fires immediately with the current list. */
+  onPresence(listener: ((userIds: string[]) => void) | null) {
+    this.presenceListener = listener;
+    listener?.(this.presence);
   }
 
   /** Stop for good; call when leaving the board. */
@@ -303,6 +312,14 @@ export class RoomConnection {
 
       case "ack":
         this.inFlight.delete(message.seq as number);
+        return;
+
+      // for React, not Game; can arrive before "joined"
+      case "presence":
+        if (Array.isArray(message.userIds)) {
+          this.presence = message.userIds.filter((id): id is string => typeof id === "string");
+          this.presenceListener?.(this.presence);
+        }
         return;
 
       case "joined":

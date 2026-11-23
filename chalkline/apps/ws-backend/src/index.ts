@@ -231,6 +231,24 @@ function leaveRoom(client: Client, roomId: string) {
     if (!room) return;
     room.sockets.delete(client.socket);
     releaseRoom(roomId, room);
+    sendPresence(roomId);
+}
+
+/**
+ * Tells everyone in a room who is in it now, as user ids, on every join and
+ * leave. The whole list rather than a joined/left event: a late or missed
+ * message cannot leave anyone's list wrong, and a person with two tabs open
+ * stays listed until the last one closes. Names and faces come from /people.
+ */
+function sendPresence(roomId: string) {
+    const room = rooms.get(roomId);
+    if (!room) return;
+    const userIds = new Set<string>();
+    for (const socket of room.sockets) {
+        const userId = clients.get(socket)?.userId;
+        if (userId) userIds.add(userId);
+    }
+    broadcast(roomId, { type: "presence", roomId, userIds: [...userIds] });
 }
 
 /**
@@ -401,6 +419,7 @@ async function joinRoom(client: Client, userId: string, roomId: string) {
         room.shapeCount = Math.max(room.shapeCount, access.shapes);
         room.sockets.add(socket);
         client.rooms.add(roomId);
+        sendPresence(roomId);
     }
 
     // Sent behind the room's pending writes, so when the client loads the
