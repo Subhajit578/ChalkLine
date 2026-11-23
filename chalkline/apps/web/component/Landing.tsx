@@ -324,6 +324,7 @@ export function Landing() {
             <a href="#screens">Screens</a>
             <a href="#about">About</a>
             <a href="#start">Get started</a>
+            <a href="https://github.com/Subhajit578/ChalkLine" target="_blank" rel="noopener noreferrer">Github</a>
           </nav>
           <Link href="/signin" className="lp-pill">Sign in</Link>
         </header>
