@@ -46,8 +46,10 @@ const Box = { x: Coord, y: Coord, width: Coord, height: Coord, color: Color };
  * or the server rejects it.
  */
 export const SHAPE_DATA = {
-  rect: z.object(Box),
-  circle: z.object({ centerX: Coord, centerY: Coord, radius: Coord, color: Color }),
+  // `kind` draws a different outline in the same box; absent is a plain
+  // rectangle or circle, which is also how a client that predates it shows one
+  rect: z.object({ ...Box, kind: z.enum(["rhombus", "parallelogram", "triangle", "cylinder"]).optional() }),
+  circle: z.object({ centerX: Coord, centerY: Coord, radius: Coord, color: Color, kind: z.enum(["sphere"]).optional() }),
   pencil: z.object({ points: Points, color: Color }),
   line: z.object({ points: Points, color: Color }),
   arrow: z.object({ points: Points, color: Color }),

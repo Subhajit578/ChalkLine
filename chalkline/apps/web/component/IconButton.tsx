@@ -9,6 +9,7 @@ export function IconButton({
   activeBackground,
   title,
   disabled = false,
+  expanded,
 }: {
   icon: ReactNode;
   onClick: () => void;
@@ -28,6 +29,8 @@ export function IconButton({
    * invites a second press that would start the whole thing again.
    */
   disabled?: boolean;
+  /** set only on a button that opens a menu: whether that menu is open */
+  expanded?: boolean;
 }) {
   return (
     <button
@@ -36,6 +39,8 @@ export function IconButton({
       disabled={disabled}
       title={title}
       aria-pressed={activated}
+      aria-haspopup={expanded === undefined ? undefined : "menu"}
+      aria-expanded={expanded}
       aria-label={title}
       style={{
         display: "grid",
