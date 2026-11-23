@@ -5,7 +5,7 @@ import { isDrawable } from "./shapeGuard";
 import { imageUrl, uploadImage, unsupportedReason, UploadError } from "./images";
 import { DEFAULT_COLOR, resolveColor, THEMES, type ThemeName } from "./theme";
 import { SELECT_TOLERANCE, ERASER_RADIUS, ShapeRenderer, type Point } from "./renderer";
-import { circleFromDrag, elbowPoints, simplifyStroke } from "./routing";
+import { circleFromDrag, elbowPoints, RECT_KINDS, simplifyStroke, straightPoints, type RectKind } from "./routing";
 import { paintShapes } from "./scene";
 import {
   renderShapesToBlob,
@@ -30,6 +30,7 @@ import {
   boundsBetween,
   boundsOf,
   boundsUnion,
+  forgetMeasuredBounds,
   handleAt,
   handlesOf,
   hitTest,
@@ -96,8 +97,9 @@ const MAX_BACKLOG = 5000;
  * of points, so hit-testing and transforms can be written once for all three.
  */
 export type Shape =
-  | { type: "rect"; x: number; y: number; width: number; height: number; color: string; id: string }
-  | { type: "circle"; centerX: number; centerY: number; radius: number; color: string; id: string  }
+  // `kind` draws a different outline in the same geometry; absent is the plain shape
+  | { type: "rect"; x: number; y: number; width: number; height: number; color: string; id: string; kind?: RectKind }
+  | { type: "circle"; centerX: number; centerY: number; radius: number; color: string; id: string; kind?: "sphere" }
   | { type: "pencil"; points: Point[]; color: string; id: string  }
   // line and arrow are polylines: two points for a straight run, three for an
   // elbow. Identical shapes, so one is convertible to the other later.
@@ -424,6 +426,7 @@ export class Game {
     this.canvas.removeEventListener("mousemove", this.mouseMoveHandler);
     this.canvas.removeEventListener("dblclick", this.dblClickHandler);
     window.removeEventListener("keydown", this.keyboardHandler)
+    document.fonts.removeEventListener("loadingdone", this.fontsLoaded);
     if (this.frame !== null) cancelAnimationFrame(this.frame);
     if (this.strokeTimer) clearInterval(this.strokeTimer);
     if (this.strokeSweep) clearTimeout(this.strokeSweep);
@@ -962,6 +965,7 @@ export class Game {
       color: (stored) => this.paintColor(stored),
       images: this.images,
       placeholderColor: THEMES[this.theme].panelMuted,
+      shade: THEMES[this.theme].shade,
       // the shape being edited is hidden while its overlay is open
       skipId: this.editingId,
       // skip off-screen shapes
@@ -1066,18 +1070,37 @@ export class Game {
     const from = this.start;
     const to = this.pointer;
 
-    if (this.selectedTool === "rect") {
-      this.renderer.rect(from.x, from.y, to.x - from.x, to.y - from.y, color);
-    } else if (this.selectedTool === "circle") {
+    const rectKind = this.rectKind();
+    if (this.selectedTool === "rect" || rectKind) {
+      this.renderer.rect(from.x, from.y, to.x - from.x, to.y - from.y, color, THEMES[this.theme].shade, rectKind);
+    } else if (this.selectedTool === "circle" || this.selectedTool === "sphere") {
       const { centerX, centerY, radius } = circleFromDrag(from, to);
-      this.renderer.circle(centerX, centerY, radius, color);
+      this.renderer.circle(centerX, centerY, radius, color, THEMES[this.theme].shade, this.circleKind());
     } else if (this.selectedTool === "pencil" && this.currentStrokeId) {
       this.renderer.stroke(this.currentStroke, color);
     } else if (this.selectedTool === "line") {
       this.renderer.polyline([from, to], color);
-    } else if (this.selectedTool === "arrow") {
-      this.renderer.arrow(elbowPoints(from, to), color);
+    } else {
+      const points = this.arrowPoints(from, to);
+      if (points) this.renderer.arrow(points, color);
     }
+  }
+
+  /** The outline the current tool draws in a rect's box; tool names match the kinds. */
+  private rectKind(): RectKind | undefined {
+    return (RECT_KINDS as readonly string[]).includes(this.selectedTool) ? (this.selectedTool as RectKind) : undefined;
+  }
+
+  private circleKind(): "sphere" | undefined {
+    return this.selectedTool === "sphere" ? "sphere" : undefined;
+  }
+
+  /** Points for the current arrow tool, or null for any other tool; the preview and the saved shape share it. */
+  private arrowPoints(from: Point, to: Point): Point[] | null {
+    if (this.selectedTool === "arrow") return elbowPoints(from, to);
+    if (this.selectedTool === "straightArrow") return straightPoints(from, to);
+    if (this.selectedTool === "slantArrow") return [from, to];
+    return null;
   }
 
   /**
@@ -1739,7 +1762,17 @@ export class Game {
     this.canvas.addEventListener("mousemove", this.mouseMoveHandler);
     this.canvas.addEventListener("dblclick", this.dblClickHandler);
     window.addEventListener("keydown", this.keyboardHandler)
+    // text in the web font paints as its fallback until the font arrives;
+    // ask for it now rather than on the first handwritten note
+    document.fonts.addEventListener("loadingdone", this.fontsLoaded);
+    void document.fonts.load('20px "ChalkLine Hand"').catch(() => {});
   }
+
+  /** A font arrived: text boxes were measured with its fallback, so measure and paint again. */
+  private fontsLoaded = () => {
+    forgetMeasuredBounds();
+    this.requestPaint();
+  };
 
   /** where the cursor is now */
   private pointOf(e: MouseEvent): Point {
@@ -2064,7 +2097,9 @@ export class Game {
     const end = this.pointOf(e);
     let shape: Shape | null = null;
 
-    if (selectedTool === "rect") {
+    const rectKind = this.rectKind();
+    const circleKind = this.circleKind();
+    if (selectedTool === "rect" || rectKind) {
       shape = {
         id,
         type: "rect",
@@ -2073,8 +2108,10 @@ export class Game {
         height,
         width,
         color: this.currentColor,
+        // left off a plain rectangle, so its stored row is unchanged
+        ...(rectKind && { kind: rectKind }),
       };
-    } else if (selectedTool === "circle") {
+    } else if (selectedTool === "circle" || circleKind) {
       const { centerX, centerY, radius } = circleFromDrag(start, end);
       shape = {
         id,
@@ -2083,6 +2120,7 @@ export class Game {
         centerX,
         centerY,
         color: this.currentColor,
+        ...(circleKind && { kind: circleKind }),
       };
     } else if (selectedTool === "pencil") {
       // a tap, not a stroke: drop it and leave nothing behind
@@ -2114,15 +2152,13 @@ export class Game {
         points: [start, end],
         color: this.currentColor,
       };
-    } else if (selectedTool === "arrow") {
-      if (Math.hypot(width, height) < 4) return;
-      shape = {
-        id,
-        type: "arrow",
-        // the same router the preview used, so what is saved is what was shown
-        points: elbowPoints(start, end),
-        color: this.currentColor,
-      };
+    } else {
+      // the same router the preview used, so what is saved is what was shown
+      const points = this.arrowPoints(start, end);
+      if (points) {
+        if (Math.hypot(width, height) < 4) return;
+        shape = { id, type: "arrow", points, color: this.currentColor };
+      }
     }
 
     if (!shape) {

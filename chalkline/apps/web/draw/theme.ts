@@ -27,6 +27,8 @@ export type Palette = {
    * strong.
    */
   grid: string;
+  /** the light hatch lines inside rectangles and circles, whatever their outline colour */
+  shade: string;
   /** toolbar background, sitting over the canvas */
   panel: string;
   panelBorder: string;
@@ -41,6 +43,7 @@ export const THEMES: Record<ThemeName, Palette> = {
   dark: {
     canvas: "#0b0c0f",
     grid: "rgba(255, 255, 255, 0.15)",
+    shade: "#454b55",
     panel: "rgba(24, 26, 31, 0.88)",
     panelBorder: "rgba(255, 255, 255, 0.14)",
     panelText: "#f3f4f6",
@@ -58,6 +61,7 @@ export const THEMES: Record<ThemeName, Palette> = {
   light: {
     canvas: "#fdfdfc",
     grid: "rgba(17, 24, 39, 0.11)",
+    shade: "#d2d5da",
     panel: "rgba(255, 255, 255, 0.92)",
     panelBorder: "rgba(17, 24, 39, 0.12)",
     panelText: "#1f2937",

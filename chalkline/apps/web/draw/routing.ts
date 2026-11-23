@@ -39,6 +39,45 @@ export function elbowPoints(from: Point, to: Point): Point[] {
   return [start, corner, end];
 }
 
+/**
+ * Outlines a rect shape can be drawn as, in the same box. Keep in step with
+ * SHAPE_DATA.rect in packages/common/src/protocol.ts.
+ */
+export const RECT_KINDS = ["rhombus", "parallelogram", "triangle", "cylinder"] as const;
+export type RectKind = (typeof RECT_KINDS)[number];
+
+/** How far a parallelogram's top edge is pushed right, as a share of its width. */
+const PARALLELOGRAM_SLANT = 0.25;
+
+/**
+ * Corners of the straight-edged kinds, clockwise from the top, for a box
+ * already normalised to a top-left origin. Null for a plain rectangle and for
+ * the cylinder, whose outline is curved. Drawing and hit-testing both read
+ * this, so what is clicked is what is seen.
+ */
+export function polygonOf(kind: RectKind | undefined, left: number, top: number, w: number, h: number): Point[] | null {
+  const right = left + w;
+  const bottom = top + h;
+  const cx = left + w / 2;
+  const cy = top + h / 2;
+  if (kind === "triangle") return [{ x: cx, y: top }, { x: right, y: bottom }, { x: left, y: bottom }];
+  if (kind === "rhombus") return [{ x: cx, y: top }, { x: right, y: cy }, { x: cx, y: bottom }, { x: left, y: cy }];
+  if (kind === "parallelogram") {
+    const s = w * PARALLELOGRAM_SLANT;
+    return [{ x: left + s, y: top }, { x: right, y: top }, { x: right - s, y: bottom }, { x: left, y: bottom }];
+  }
+  return null;
+}
+
+/** A purely horizontal or vertical run from `from`, along whichever axis the drag mostly went. */
+export function straightPoints(from: Point, to: Point): Point[] {
+  const end =
+    Math.abs(to.x - from.x) >= Math.abs(to.y - from.y)
+      ? { x: to.x, y: from.y }
+      : { x: from.x, y: to.y };
+  return [{ x: from.x, y: from.y }, end];
+}
+
 /** How far `p` is from the segment a-b. */
 function distanceToSegment(p: Point, a: Point, b: Point): number {
   const dx = b.x - a.x;

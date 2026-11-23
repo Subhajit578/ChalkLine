@@ -1,11 +1,26 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { simplifyStroke, nearestEdge } from "./routing.ts";
+import { simplifyStroke, nearestEdge, straightPoints, polygonOf } from "./routing.ts";
 import { isDrawable } from "./shapeGuard.ts";
 
 test("simplifyStroke drops points on a straight run and keeps the ends", () => {
   const line = Array.from({ length: 200 }, (_, i) => ({ x: i, y: i * 2 }));
   assert.deepEqual(simplifyStroke(line, 0.5), [line[0], line[199]]);
+});
+
+test("straightPoints snaps to the axis the drag mostly went along", () => {
+  const from = { x: 10, y: 10 };
+  assert.deepEqual(straightPoints(from, { x: 60, y: 25 }), [from, { x: 60, y: 10 }]);
+  assert.deepEqual(straightPoints(from, { x: 0, y: -40 }), [from, { x: 10, y: -40 }]);
+});
+
+test("polygonOf keeps every kind inside its box and leaves curved ones to the renderer", () => {
+  for (const kind of ["triangle", "rhombus", "parallelogram"] as const) {
+    const corners = polygonOf(kind, 10, 20, 100, 60)!;
+    assert.ok(corners.every((p) => p.x >= 10 && p.x <= 110 && p.y >= 20 && p.y <= 80), kind);
+  }
+  assert.equal(polygonOf("cylinder", 0, 0, 10, 10), null);
+  assert.equal(polygonOf(undefined, 0, 0, 10, 10), null);
 });
 
 test("simplifyStroke keeps corners", () => {

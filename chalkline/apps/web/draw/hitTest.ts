@@ -1,5 +1,23 @@
 import { LINE_HEIGHT, Point } from "./renderer";
 import { Shape } from "./Game";
+import { polygonOf } from "./routing";
+
+/** The straight-edged outline of a rect shape's kind, or null when its box is its outline. */
+function cornersOf(shape: Extract<Shape, { type: "rect" }>): Point[] | null {
+    const b = boundsOf(shape);
+    return polygonOf(shape.kind, b.left, b.top, b.right - b.left, b.bottom - b.top);
+}
+
+/** Even-odd ray cast: whether `p` is inside the polygon. */
+function insidePolygon(p: Point, corners: Point[]): boolean {
+    let inside = false;
+    for (let i = 0, j = corners.length - 1; i < corners.length; j = i++) {
+        const a = corners[i]!;
+        const b = corners[j]!;
+        if (a.y > p.y !== b.y > p.y && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
+    }
+    return inside;
+}
 
 export type Bounds = { left: number; top: number; right: number; bottom: number };
 /**
@@ -106,7 +124,16 @@ export function boundsOf(shape: Shape): Bounds {
  * resizes and updates create new objects), so identity is a safe key. Don't
  * mutate a shape or a returned box.
  */
-const boundsCache = new WeakMap<Shape, Bounds>();
+let boundsCache = new WeakMap<Shape, Bounds>();
+
+/**
+ * Forget every measured box. A text box is measured with whatever font is
+ * loaded at the time, so once a web font arrives its cached width is the
+ * fallback's and has to be measured again.
+ */
+export function forgetMeasuredBounds() {
+    boundsCache = new WeakMap();
+}
 
 function measureBounds(shape: Shape): Bounds {
     switch (shape.type) {
@@ -453,7 +480,12 @@ export function hitTestInside(shapes: Shape[], point: Point): Shape | null {
         const shape = shapes[i];
         if (!shape) continue;
         if (shape.type === "rect") {
-            if (rectangleCollision(point, shape.x, shape.y, shape.width, shape.height, 0)) {
+            const corners = cornersOf(shape);
+            if (
+                corners
+                    ? insidePolygon(point, corners)
+                    : rectangleCollision(point, shape.x, shape.y, shape.width, shape.height, 0)
+            ) {
                 return shape;
             }
         } else if (shape.type === "circle") {
@@ -554,7 +586,12 @@ export function hitTest(shapes: Shape[], point: Point, tolerance: number) : Shap
     else if (shape.type === "rect") {
         // outline only, like the circle: rects are unfilled, so a point in
         // the empty middle is not touching anything
-        hit = rectangleOutlineCollision(point, shape.x, shape.y, shape.width, shape.height, tolerance)
+        // a triangle, rhombus or parallelogram is matched on its own edges, or
+        // the eraser would take it from the empty corners of its box
+        const corners = cornersOf(shape)
+        hit = corners
+            ? corners.some((c, j) => segmentCollision(corners[j === 0 ? corners.length - 1 : j - 1]!, c, point, tolerance))
+            : rectangleOutlineCollision(point, shape.x, shape.y, shape.width, shape.height, tolerance)
         if(hit ===true) {
             return shape
         } 

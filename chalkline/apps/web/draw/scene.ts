@@ -45,6 +45,9 @@ export type PaintOptions = {
   /** what an absent or broken image is outlined in */
   placeholderColor: string;
 
+  /** the hatch inside rectangles and circles */
+  shade: string;
+
   /**
    * A shape to leave unpainted.
    *
@@ -111,10 +114,10 @@ export function paintShapes(
 
     switch (shape.type) {
       case "rect":
-        renderer.rect(shape.x, shape.y, shape.width, shape.height, color);
+        renderer.rect(shape.x, shape.y, shape.width, shape.height, color, options.shade, shape.kind);
         break;
       case "circle":
-        renderer.circle(shape.centerX, shape.centerY, shape.radius, color);
+        renderer.circle(shape.centerX, shape.centerY, shape.radius, color, options.shade, shape.kind);
         break;
       case "pencil":
         renderer.stroke(shape.points, color);

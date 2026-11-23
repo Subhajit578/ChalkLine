@@ -1,4 +1,5 @@
 import { Handle } from "./hitTest";
+import { polygonOf, type RectKind } from "./routing";
 export type Point = { x: number; y: number };
 
 /**
@@ -7,6 +8,9 @@ export type Point = { x: number; y: number };
  * would smooth away what the person actually drew.
  */
 const CORNER_RADIUS = 12;
+
+/** Distance between the shading lines inside rectangles and circles, in world units. */
+const HATCH_GAP = 8;
 
 /**
  * Gap between lines of a text shape, as a multiple of its font size.
@@ -41,6 +45,21 @@ export const HANDLE_SIZE = 8;
  */
 export const DEFAULT_FONT_FAMILY =
   'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+
+/**
+ * The families the text menu offers. A shape stores the stack itself, not a
+ * name from this list, so a board keeps rendering if the list changes.
+ *
+ * "ChalkLine Hand" is the one web font, declared in app/globals.css under a
+ * fixed name: next/font hashes family names in production builds, and a
+ * hashed name saved into a board would stop matching after the next deploy.
+ */
+export const FONTS = [
+  { label: "Sans", family: DEFAULT_FONT_FAMILY },
+  { label: "Serif", family: 'ui-serif, Georgia, "Times New Roman", serif' },
+  { label: "Monospace", family: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace' },
+  { label: "Handwritten", family: '"ChalkLine Hand", cursive' },
+] as const;
 /**
  * Every drawing primitive, in one place.
  *
@@ -68,6 +87,32 @@ export const DEFAULT_FONT_FAMILY =
  * disappearing.
  */
 const MIN_STROKE_DEVICE_PX = 1;
+
+/**
+ * A closed polygon with every corner rounded like the rectangle's.
+ *
+ * Starts halfway along the closing edge so the first corner is rounded the
+ * same way as the rest. An arc meets each edge r/tan(θ/2) from its corner, so
+ * the radius is shrunk where that would run past half of the shorter edge -
+ * otherwise a sharp corner (a thin triangle's apex) would bulge outwards.
+ */
+function roundedPolygon(path: Path2D, corners: Point[], radius: number) {
+  const n = corners.length;
+  const first = corners[0]!;
+  const last = corners[n - 1]!;
+  path.moveTo((last.x + first.x) / 2, (last.y + first.y) / 2);
+  for (let i = 0; i < n; i++) {
+    const prev = corners[(i + n - 1) % n]!;
+    const p = corners[i]!;
+    const next = corners[(i + 1) % n]!;
+    const a = Math.hypot(prev.x - p.x, prev.y - p.y);
+    const b = Math.hypot(next.x - p.x, next.y - p.y);
+    const cos = ((prev.x - p.x) * (next.x - p.x) + (prev.y - p.y) * (next.y - p.y)) / (a * b || 1);
+    const halfAngle = Math.acos(Math.max(-1, Math.min(1, cos))) / 2;
+    path.arcTo(p.x, p.y, next.x, next.y, Math.min(radius, (Math.tan(halfAngle) * Math.min(a, b)) / 2));
+  }
+  path.closePath();
+}
 
 export class ShapeRenderer {
   private ctx: CanvasRenderingContext2D;
@@ -309,10 +354,8 @@ export class ShapeRenderer {
     this.ctx.fillRect(0, 0, width, height);
   }
 
-  rect(x: number, y: number, width: number, height: number, color: string) {
-    this.ctx.strokeStyle = color;
-    this.ctx.lineWidth = this.strokeWidth(1);
-
+  /** A rectangle, or one of the outlines that share its box (`kind`). */
+  rect(x: number, y: number, width: number, height: number, color: string, shade: string, kind?: RectKind) {
     // dragging right-to-left or upwards gives negative sizes, so normalise to a
     // top-left origin before the corner maths
     const left = width < 0 ? x + width : x;
@@ -320,22 +363,71 @@ export class ShapeRenderer {
     const w = Math.abs(width);
     const h = Math.abs(height);
 
-    // a corner cannot round past half the shorter side, or the arcs meet and
-    // the rectangle turns into a lozenge
-    const radius = Math.min(CORNER_RADIUS, w / 2, h / 2);
+    const outline = new Path2D();
+    // lines drawn over the shading but not part of the silhouette
+    const detail = new Path2D();
+    const corners = polygonOf(kind, left, top, w, h);
+    if (corners) {
+      roundedPolygon(outline, corners, CORNER_RADIUS);
+    } else if (kind === "cylinder") {
+      // a box with an elliptical cap top and bottom; the cap is flatter than
+      // the width so it reads as seen from slightly above
+      const rx = w / 2;
+      const ry = Math.min(h / 2, w * 0.15);
+      const cx = left + rx;
+      outline.moveTo(left, top + ry);
+      outline.ellipse(cx, top + ry, rx, ry, 0, Math.PI, 0);
+      outline.lineTo(left + w, top + h - ry);
+      outline.ellipse(cx, top + h - ry, rx, ry, 0, 0, Math.PI);
+      outline.closePath();
+      // the near rim of the top cap
+      detail.ellipse(cx, top + ry, rx, ry, 0, 0, Math.PI);
+    } else {
+      // a corner cannot round past half the shorter side, or the arcs meet and
+      // the rectangle turns into a lozenge
+      outline.roundRect(left, top, w, h, Math.min(CORNER_RADIUS, w / 2, h / 2));
+    }
+    this.hatch(outline, left, top, w, h, shade);
 
-    this.ctx.beginPath();
-    this.ctx.roundRect(left, top, w, h, radius);
-    this.ctx.stroke();
-  }
-
-  circle(centerX: number, centerY: number, radius: number, color: string) {
     this.ctx.strokeStyle = color;
     this.ctx.lineWidth = this.strokeWidth(1);
+    this.ctx.stroke(outline);
+    this.ctx.stroke(detail);
+  }
+
+  /** A circle, or a sphere: the same disc with the near half of its equator. */
+  circle(centerX: number, centerY: number, radius: number, color: string, shade: string, kind?: "sphere") {
+    const r = Math.abs(radius);
+    const outline = new Path2D();
+    outline.arc(centerX, centerY, r, 0, Math.PI * 2);
+    this.hatch(outline, centerX - r, centerY - r, r * 2, r * 2, shade);
+
+    this.ctx.strokeStyle = color;
+    this.ctx.lineWidth = this.strokeWidth(1);
+    this.ctx.stroke(outline);
+    if (kind === "sphere") {
+      const equator = new Path2D();
+      equator.ellipse(centerX, centerY, r, r * 0.3, 0, 0, Math.PI);
+      this.ctx.stroke(equator);
+    }
+  }
+
+  /**
+   * Light 45° lines filling `outline`, drawn before its stroke so the edge
+   * sits on top. The box is the outline's bounds, which the lines sweep.
+   */
+  private hatch(outline: Path2D, left: number, top: number, w: number, h: number, shade: string) {
+    this.ctx.save();
+    this.ctx.clip(outline);
+    this.ctx.strokeStyle = shade;
+    this.ctx.lineWidth = this.strokeWidth(1);
     this.ctx.beginPath();
-    this.ctx.arc(centerX, centerY, Math.abs(radius), 0, Math.PI * 2);
+    for (let d = HATCH_GAP / 2; d < w + h; d += HATCH_GAP) {
+      this.ctx.moveTo(left + d, top);
+      this.ctx.lineTo(left + d - h, top + h);
+    }
     this.ctx.stroke();
-    this.ctx.closePath();
+    this.ctx.restore();
   }
   arrow(points: Point[], color: string) {
     if (points.length < 2) return;

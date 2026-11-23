@@ -1,7 +1,7 @@
 import type { Shape } from "./Game";
 import { ShapeRenderer } from "./renderer";
 import { paintShapes } from "./scene";
-import { boundsUnion } from "./hitTest";
+import { boundsUnion, forgetMeasuredBounds } from "./hitTest";
 import { resolveColor, THEMES, type ThemeName } from "./theme";
 
 /**
@@ -117,6 +117,18 @@ export async function renderShapesToBlob(
   requestedScale: number,
   theme: ThemeName = "light"
 ): Promise<BoardRender | null> {
+  // before measuring: text in a web font that has not loaded would be sized
+  // and drawn in its fallback. Passing the text loads only the subsets it uses.
+  const textByFamily = new Map<string, string>();
+  for (const s of shapes) {
+    if (s.type === "text") textByFamily.set(s.fontFamily, (textByFamily.get(s.fontFamily) ?? "") + s.text);
+  }
+  await Promise.all(
+    [...textByFamily].map(([family, text]) => document.fonts.load(`16px ${family}`, text).catch(() => []))
+  );
+  // anything measured before the font arrived is the fallback's width
+  if (textByFamily.size > 0) forgetMeasuredBounds();
+
   const box = exportBounds(shapes);
   if (!box) return null;
 
@@ -152,6 +164,7 @@ export async function renderShapesToBlob(
       color: (stored) => resolveColor(stored, theme),
       images,
       placeholderColor: THEMES[theme].panelMuted,
+      shade: THEMES[theme].shade,
       // no skipId: there is no editor overlay in a file, so a shape hidden
       // behind one would just be a hole
       // no highlightAlpha: the appear animation is a thing that happens on

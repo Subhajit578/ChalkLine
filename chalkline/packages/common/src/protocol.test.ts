@@ -10,6 +10,8 @@ test("every shape the client draws is accepted", () => {
   const bodies = [
     { type: "rect", data: { x: 1, y: 2, width: -30, height: 40, color: "ink" } },
     { type: "circle", data: { centerX: 5, centerY: 5, radius: 9, color: "red" } },
+    { type: "rect", data: { x: 1, y: 2, width: 30, height: 40, kind: "triangle" } },
+    { type: "circle", data: { centerX: 5, centerY: 5, radius: 9, kind: "sphere" } },
     { type: "pencil", data: { points: [{ x: 0, y: 0 }, { x: 3, y: 4 }], color: "blue" } },
     { type: "line", data: { points: [{ x: 0, y: 0 }, { x: 3, y: 4 }], color: "blue" } },
     { type: "arrow", data: { points: [{ x: 0, y: 0 }, { x: 3, y: 0 }, { x: 3, y: 4 }] } },
@@ -31,6 +33,7 @@ test("shapes that would break a client's repaint are refused", () => {
     { type: "text", data: { x: 0, y: 0, text: "x".repeat(MAX_TEXT_LENGTH + 1), fontSize: 20, fontFamily: "x" } },
     { type: "image", data: { x: 0, y: 0, width: 1, height: 1, hash: "../../etc/passwd" } },
     { type: "hexagon", data: {} },
+    { type: "rect", data: { x: 1, y: 2, width: 3, height: 4, kind: "hexagon" } },
     { type: "rect" },
   ];
   for (const body of poison) assert.equal(ok(shape(body)), false, JSON.stringify(body).slice(0, 80));
