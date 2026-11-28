@@ -45,3 +45,25 @@ export async function getPeople(roomId: string): Promise<Person[]> {
   });
   return res.data.people;
 }
+
+/** Your private sticky note on a board, or null when you have none. */
+export async function getNote(roomId: string): Promise<string | null> {
+  const res = await axios.get(`${API_URL}/note/${roomId}`, {
+    headers: { Authorization: `Bearer ${getToken()}` },
+  });
+  return res.data.text;
+}
+
+/**
+ * Saves your note on a board; blank text deletes it. A keepalive fetch rather
+ * than axios, so the save sent as the tab closes still arrives.
+ */
+export async function saveNote(roomId: string, text: string): Promise<void> {
+  const res = await fetch(`${API_URL}/note/${roomId}`, {
+    method: "PUT",
+    keepalive: true,
+    headers: { Authorization: `Bearer ${getToken()}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  if (!res.ok) throw new Error(`Could not save the note (HTTP ${res.status})`);
+}

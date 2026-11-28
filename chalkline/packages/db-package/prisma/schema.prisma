@@ -38,6 +38,7 @@ model User {
   shapes      Shape[]
   memberships RoomMember[]
   files       File[]
+  notes       Note[]
 }
 
 model Room {
@@ -53,6 +54,7 @@ model Room {
   createdAt DateTime     @default(now())
   shapes    Shape[]
   members   RoomMember[]
+  notes     Note[]
 
   /// dashboard lists rooms by owner
   @@index([adminId])
@@ -132,4 +134,20 @@ model Shape {
 
   /// Board load: a room's shapes, oldest first
   @@index([roomId, createdAt])
+}
+
+/// A private sticky note: one per person per board, seen only by its author.
+/// There is no empty note - saving blank text deletes the row. Cascades, so
+/// deleting the board or the account takes its notes along.
+model Note {
+  roomId    Int
+  userId    String
+  text      String
+  updatedAt DateTime @updatedAt
+  room      Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([roomId, userId])
+  /// account deletion finds a user's notes on other people's boards
+  @@index([userId])
 }

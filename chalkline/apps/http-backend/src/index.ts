@@ -2,7 +2,7 @@ import express from "express";
 import jwt from "jsonwebtoken";
 import {isLoggedIn} from "./middleware"
 import {JWT_SECRET, JWT_ALGORITHM, isAllowedOrigin} from '@repo/backend-common/config'
-import {CreateUserSchema,SigninUserSchema,CreateRoomSchema,ClaimAccountSchema,PresignUploadSchema,ConfirmUploadSchema,UpdateAvatarSchema,MAX_IMAGE_BYTES} from "@repo/common/types";
+import {CreateUserSchema,SigninUserSchema,CreateRoomSchema,ClaimAccountSchema,PresignUploadSchema,ConfirmUploadSchema,UpdateAvatarSchema,SaveNoteSchema,MAX_IMAGE_BYTES} from "@repo/common/types";
 import { guestUsername, MAX_NAME_ATTEMPTS } from "./guestNames";
 import { startGuestSweeper, GUEST_TTL_DAYS, deleteAccount } from "./guestCleanup";
 import { startFileSweeper } from "./fileCleanup";
@@ -159,6 +159,8 @@ const createRoomLimiter = perUserLimit(60 * 60 * 1000, 30, "Too many new canvase
 const joinLimiter = perUserLimit(10 * 60 * 1000, 60, "Too many attempts to open canvases - wait a few minutes");
 const presignLimiter = perUserLimit(10 * 60 * 1000, 60, "Too many uploads - wait a few minutes");
 const confirmLimiter = perUserLimit(10 * 60 * 1000, 60, "Too many uploads - wait a few minutes");
+// the note autosaves after a pause in typing, so steady typing stays well under this
+const noteLimiter = perUserLimit(60 * 1000, 120, "Saving the note too often - wait a moment");
 
 /** Max canvases per account. */
 const MAX_ROOMS_PER_USER = 100;
@@ -708,6 +710,59 @@ app.get("/people/:roomId", isLoggedIn, async (req, res) => {
     } catch (err) {
         console.error("[people] could not load the people on a board", err)
         return res.status(500).send({ message: "Could not load who is on this board" })
+    }
+})
+/** Whether someone can open a board: its owner or a member, as for /shapes. */
+async function inRoom(roomId: number, userId: string) {
+    const room = await prismaClient.room.findUnique({
+        where: { id: roomId },
+        select: { adminId: true, members: { where: { userId }, select: { id: true } } },
+    })
+    return !!room && (room.adminId === userId || room.members.length > 0)
+}
+
+/**
+ * Your sticky note on a board, or null if you have none. Private: only ever
+ * the caller's own row, and nothing about it goes over the socket.
+ */
+app.get("/note/:roomId", isLoggedIn, async (req, res) => {
+    const roomId = Number(req.params.roomId)
+    const userId = req.userId!
+    if (!Number.isInteger(roomId)) return res.status(404).send({ message: "Invalid Room Id" })
+    try {
+        if (!(await inRoom(roomId, userId))) return res.status(404).send({ message: "Invalid Room Id" })
+        const note = await prismaClient.note.findUnique({
+            where: { roomId_userId: { roomId, userId } },
+            select: { text: true },
+        })
+        return res.send({ text: note?.text ?? null })
+    } catch (err) {
+        console.error("[note] could not load a note", err)
+        return res.status(500).send({ message: "Could not load your note" })
+    }
+})
+
+/** Saves your note on a board. Blank text deletes it, so there is never an empty note. */
+app.put("/note/:roomId", isLoggedIn, noteLimiter, async (req, res) => {
+    const roomId = Number(req.params.roomId)
+    const userId = req.userId!
+    if (!Number.isInteger(roomId)) return res.status(404).send({ message: "Invalid Room Id" })
+    const parsed = SaveNoteSchema.safeParse(req.body)
+    if (!parsed.success) {
+        return res.status(400).send({ message: parsed.error.issues[0]?.message ?? "That note is not valid" })
+    }
+    const { text } = parsed.data
+    try {
+        if (!(await inRoom(roomId, userId))) return res.status(404).send({ message: "Invalid Room Id" })
+        if (text.trim() === "") {
+            await prismaClient.note.deleteMany({ where: { roomId, userId } })
+            return res.send({ text: null })
+        }
+        await prismaClient.note.upsert({ where: { roomId_userId: { roomId, userId } }, create: { roomId, userId, text }, update: { text } })
+        return res.send({ text })
+    } catch (err) {
+        console.error("[note] could not save a note", err)
+        return res.status(500).send({ message: "Could not save your note" })
     }
 })
 /**
