@@ -38,6 +38,7 @@ import {
   FileDown,
   GripVertical,
   GripHorizontal,
+  StickyNote as NoteIcon,
 } from "lucide-react";
 import { Game, TextRequest } from "@/draw/Game";
 import { nearestEdge, type Edge } from "@/draw/routing";
@@ -45,6 +46,7 @@ import TextOverlay from "./TextOverlay";
 import { makeNotice, ToastStack, type Notice } from "./Toast";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { BoardPeople } from "./BoardPeople";
+import { StickyNote, wasNoteOpen } from "./StickyNote";
 import { saveBoardAsPdf } from "@/lib/pdf";
 import { DEFAULT_FONT_FAMILY, DEFAULT_FONT_SIZE, FONTS } from "@/draw/renderer";
 import type { ConnectionStatus, RoomConnection } from "@/draw/connection";
@@ -123,8 +125,9 @@ export function Canvas({
   // whether any shape is on screen; drives the offer to scroll back
   const [contentVisible, setContentVisible] = useState(true);
   const [gridOn, setGridOn] = useState(true);
-  // where the toolbar sits, so the people stack can stay out from under it
+  // where the toolbar sits, so the people stack and the note can stay out from under it
   const [toolbarRect, setToolbarRect] = useState<DOMRect | null>(null);
+  const [noteOpen, setNoteOpen] = useState(() => wasNoteOpen(roomId));
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const showNotice = useCallback(
@@ -502,6 +505,7 @@ export function Canvas({
       <ToastStack notices={notices} onDismiss={dismissNotice} />
 
       <BoardPeople roomId={roomId} connection={connection} palette={palette} avoid={toolbarRect} />
+      <StickyNote roomId={roomId} open={noteOpen} onOpenChange={setNoteOpen} palette={palette} avoid={toolbarRect} />
 
       <TopBar
         selectedTool={selectedTool}
@@ -521,6 +525,8 @@ export function Canvas({
         exporting={exporting}
         gridOn={gridOn}
         onToggleGrid={() => game?.toggleGrid()}
+        noteOpen={noteOpen}
+        onToggleNote={() => setNoteOpen((o) => !o)}
         themeChoice={choice}
         onCycleTheme={cycle}
         viewport={size}
@@ -554,6 +560,8 @@ function TopBar({
   exporting,
   gridOn,
   onToggleGrid,
+  noteOpen,
+  onToggleNote,
   themeChoice,
   onCycleTheme,
   viewport,
@@ -576,6 +584,8 @@ function TopBar({
   exporting: boolean;
   gridOn: boolean;
   onToggleGrid: () => void;
+  noteOpen: boolean;
+  onToggleNote: () => void;
   themeChoice: ThemeChoice;
   onCycleTheme: () => void;
   viewport: { w: number; h: number };
@@ -856,6 +866,14 @@ function TopBar({
         activated={gridOn}
         icon={<Grid2x2 size={20} />}
         title={gridOn ? "Hide the grid" : "Show the grid"}
+        {...iconProps}
+      />
+
+      <IconButton
+        onClick={onToggleNote}
+        activated={noteOpen}
+        icon={<NoteIcon size={20} />}
+        title={noteOpen ? "Hide your note" : "Your note (only you can see it)"}
         {...iconProps}
       />
 

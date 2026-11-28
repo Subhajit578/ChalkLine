@@ -121,3 +121,11 @@ export const ConfirmUploadSchema = z.object({
 export const UpdateAvatarSchema = z.object({
     avatar: z.string().min(3).max(64),
 })
+
+/** Longest sticky note, in characters. The web app's box uses the same cap. */
+export const MAX_NOTE_LENGTH = 2000;
+
+/** Saving your sticky note on a board. Blank text deletes it. */
+export const SaveNoteSchema = z.object({
+    text: z.string().max(MAX_NOTE_LENGTH, `A note can be at most ${MAX_NOTE_LENGTH} characters`),
+})

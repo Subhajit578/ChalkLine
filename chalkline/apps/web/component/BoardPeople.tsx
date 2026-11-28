@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperti
 import { Avatar } from "./Avatar";
 import { getPeople } from "@/draw/http";
 import { rankPeople, type Person } from "@/draw/people";
+import { clearOfToolbar } from "@/draw/placement";
 import type { RoomConnection } from "@/draw/connection";
 import type { Palette } from "@/draw/theme";
 
@@ -80,20 +81,13 @@ export function BoardPeople({
 
   const ranked = useMemo(() => rankPeople(people, online), [people, online]);
 
-  // In the top-right corner, unless the toolbar covers it (a narrow window, or
-  // docked there): then just below a horizontal bar, or beside a vertical one.
+  // in the top-right corner, unless the toolbar covers it
   useLayoutEffect(() => {
     const el = rootRef.current;
     if (!el || !avoid) return;
-    const vw = window.innerWidth;
-    const covered =
-      avoid.right > vw - MARGIN - el.offsetWidth &&
-      avoid.left < vw - MARGIN &&
-      avoid.top < MARGIN + el.offsetHeight &&
-      avoid.bottom > MARGIN;
-    if (!covered) setPlaced({});
-    else if (avoid.width >= avoid.height) setPlaced({ top: avoid.bottom + 8 });
-    else setPlaced({ right: vw - avoid.left + 8 });
+    const panel = { width: el.offsetWidth, height: el.offsetHeight };
+    const view = { width: window.innerWidth, height: window.innerHeight };
+    setPlaced(clearOfToolbar(avoid, panel, "top", view, MARGIN));
   }, [avoid, ranked.length]);
   if (ranked.length === 0) return null;
 
