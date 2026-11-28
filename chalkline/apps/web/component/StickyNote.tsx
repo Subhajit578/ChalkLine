@@ -1,12 +1,12 @@
 "use client";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
-import { Gochi_Hand } from "next/font/google";
+import { Kalam } from "next/font/google";
 import { Minus, StickyNote as NoteIcon } from "lucide-react";
 import { getNote, saveNote } from "@/draw/http";
 import type { Palette } from "@/draw/theme";
 
 /** the note's own handwriting, used nowhere else, so a note never reads as board text */
-const noteHand = Gochi_Hand({ weight: "400", subsets: ["latin"], display: "swap" });
+const noteHand = Kalam({ weight: "400", subsets: ["latin"], display: "swap" });
 
 /** the same cap as MAX_NOTE_LENGTH in @repo/common/types, which the server enforces */
 const MAX_LENGTH = 2000;

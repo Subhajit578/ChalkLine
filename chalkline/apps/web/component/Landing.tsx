@@ -22,6 +22,7 @@ const GLOW = "#f2b544";
  * different seeds, so each line comes out slightly doubled, like a hand going
  * over it again. Same recipe as AuthHero, sized to each drawing's own box.
  */
+
 const pencil = (id: string, warpSeed: number, scale: number, grainSeed: number, alpha: string) => (
   <filter id={id} x="-15%" y="-15%" width="130%" height="130%">
     <feTurbulence type="fractalNoise" baseFrequency="0.02" numOctaves={2} seed={warpSeed} result="warp" />
