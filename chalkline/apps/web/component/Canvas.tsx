@@ -599,7 +599,7 @@ function TopBar({
   const [dock, setDock] = useState<{ edge: Edge; offset: number }>({ edge: "top", offset: DOCK_MARGIN });
   const [dragAt, setDragAt] = useState<{ x: number; y: number } | null>(null);
   const barRef = useRef<HTMLDivElement>(null);
-  const grab = useRef({ dx: 0, dy: 0, x: 0, y: 0 });
+  const grab = useRef({ dx: 0, dy: 0, x: 0, y: 0, lastX: 0, lastY: 0, w: 0, h: 0 });
   const vertical = dock.edge === "left" || dock.edge === "right";
 
   // Its length changes with orientation, so the offset can only be kept on
@@ -616,20 +616,44 @@ function TopBar({
 
   function onGripDown(e: ReactPointerEvent<HTMLButtonElement>) {
     const r = barRef.current!.getBoundingClientRect();
-    grab.current = { dx: e.clientX - r.left, dy: e.clientY - r.top, x: e.clientX, y: e.clientY };
+    grab.current = {
+      dx: e.clientX - r.left,
+      dy: e.clientY - r.top,
+      x: e.clientX,
+      y: e.clientY,
+      lastX: e.clientX,
+      lastY: e.clientY,
+      w: r.width,
+      h: r.height,
+    };
     e.currentTarget.setPointerCapture(e.pointerId);
     setDragAt({ x: r.left, y: r.top });
   }
   function onGripMove(e: ReactPointerEvent<HTMLButtonElement>) {
-    if (dragAt) setDragAt({ x: e.clientX - grab.current.dx, y: e.clientY - grab.current.dy });
+    if (!dragAt) return;
+    const g = grab.current;
+    // Released where the page was not told, such as over the browser's own
+    // tabs or address bar: drop it where it was let go.
+    if (e.buttons === 0) return drop(g.lastX, g.lastY);
+    g.lastX = e.clientX;
+    g.lastY = e.clientY;
+    // Kept inside the window, so the grip can always be caught again even if
+    // a release is missed.
+    setDragAt({
+      x: Math.max(0, Math.min(e.clientX - g.dx, window.innerWidth - g.w)),
+      y: Math.max(0, Math.min(e.clientY - g.dy, window.innerHeight - g.h)),
+    });
   }
   function onGripUp(e: ReactPointerEvent<HTMLButtonElement>) {
+    drop(e.clientX, e.clientY);
+  }
+  function drop(x: number, y: number) {
     if (!dragAt) return;
     setDragAt(null);
     const g = grab.current;
     // a click, not a drag: near a corner the nearest edge would be a coin toss
-    if (Math.hypot(e.clientX - g.x, e.clientY - g.y) < 4) return;
-    const edge = nearestEdge(e.clientX, e.clientY, window.innerWidth, window.innerHeight);
+    if (Math.hypot(x - g.x, y - g.y) < 4) return;
+    const edge = nearestEdge(x, y, window.innerWidth, window.innerHeight);
     setDock({ edge, offset: edge === "top" || edge === "bottom" ? dragAt.x : dragAt.y });
   }
   const palette = THEMES[theme];
@@ -684,9 +708,12 @@ function TopBar({
                 : { right: DOCK_MARGIN, top: dock.offset }),
         display: "flex",
         flexDirection: vertical ? "column" : "row",
-        // every tool in a column is taller than a laptop screen: scroll, never clip
+        // every tool in a column is taller than a laptop screen, and in a row
+        // wider than a narrow window: scroll, never clip
         maxHeight: vertical ? `calc(100vh - ${DOCK_MARGIN * 2}px)` : undefined,
+        maxWidth: vertical ? undefined : `calc(100vw - ${DOCK_MARGIN * 2}px)`,
         overflowY: vertical ? "auto" : undefined,
+        overflowX: vertical ? undefined : "auto",
         // above the bottom-centre "scroll back" pill (20) when docked at the bottom
         zIndex: 30,
         gap: 12,
