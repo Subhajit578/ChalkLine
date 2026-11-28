@@ -1,17 +1,14 @@
 "use client";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Avatar } from "./Avatar";
 import { getPeople } from "@/draw/http";
 import { rankPeople, type Person } from "@/draw/people";
-import { clearOfToolbar } from "@/draw/placement";
 import type { RoomConnection } from "@/draw/connection";
 import type { Palette } from "@/draw/theme";
 
 /** faces in the stack before the rest fold into "+N" */
 const STACK = 4;
 const ONLINE = "#22c55e";
-/** gap from the window's corner, the same as the toolbar's */
-const MARGIN = 10;
 
 /**
  * The top contributors as a stack of faces in the corner; clicking it lists
@@ -24,20 +21,16 @@ export function BoardPeople({
   roomId,
   connection,
   palette,
-  avoid,
 }: {
   roomId: string;
   connection: RoomConnection;
   palette: Palette;
-  /** the toolbar, which can be docked over this corner */
-  avoid: DOMRect | null;
 }) {
   const [people, setPeople] = useState<Person[]>([]);
   const [online, setOnline] = useState<ReadonlySet<string>>(() => new Set());
   const [open, setOpen] = useState(false);
   const [reloads, setReloads] = useState(0);
   const rootRef = useRef<HTMLDivElement>(null);
-  const [placed, setPlaced] = useState<CSSProperties>({});
   // ids already reloaded for, so someone the server never lists cannot cause a loop
   const askedFor = useRef(new Set<string>());
 
@@ -81,14 +74,6 @@ export function BoardPeople({
 
   const ranked = useMemo(() => rankPeople(people, online), [people, online]);
 
-  // in the top-right corner, unless the toolbar covers it
-  useLayoutEffect(() => {
-    const el = rootRef.current;
-    if (!el || !avoid) return;
-    const panel = { width: el.offsetWidth, height: el.offsetHeight };
-    const view = { width: window.innerWidth, height: window.innerHeight };
-    setPlaced(clearOfToolbar(avoid, panel, "top", view, MARGIN));
-  }, [avoid, ranked.length]);
   if (ranked.length === 0) return null;
 
   const shown = ranked.slice(0, STACK);
@@ -102,7 +87,8 @@ export function BoardPeople({
   };
 
   return (
-    <div ref={rootRef} style={{ position: "fixed", top: MARGIN, right: MARGIN, zIndex: 30, ...placed }}>
+    // the canvas's top-right corner positions this; the list hangs from its right edge
+    <div ref={rootRef}>
       <button
         type="button"
         aria-expanded={open}
@@ -147,6 +133,8 @@ export function BoardPeople({
             position: "absolute",
             top: "calc(100% + 8px)",
             right: 0,
+            // over your note when both are open: the list is the short-lived one
+            zIndex: 2,
             width: "min(280px, calc(100vw - 20px))",
             maxHeight: "min(420px, 70vh)",
             overflowY: "auto",

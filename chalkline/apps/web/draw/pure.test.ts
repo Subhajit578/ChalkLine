@@ -105,17 +105,13 @@ test("rankPeople puts the most shapes first and keeps online people who have not
   assert.deepEqual(ranked.map((p) => p.id), ["bob", "eve", "cat", "dan"]);
 });
 
-test("clearOfToolbar moves a corner panel out from under the toolbar only when it covers it", () => {
-  const view = { width: 800, height: 600 };
+test("clearOfToolbar moves the top-right corner out from under the toolbar only when it covers it", () => {
   const panel = { width: 100, height: 40 };
   const rect = (left: number, top: number, width: number, height: number) =>
     ({ left, top, width, height, right: left + width, bottom: top + height });
-  const topBar = rect(10, 10, 780, 44);
-  const rightBar = rect(746, 150, 44, 440);
 
-  assert.deepEqual(clearOfToolbar(topBar, panel, "top", view, 10), { top: 62 });
-  assert.deepEqual(clearOfToolbar(topBar, panel, "bottom", view, 10), {});
-  assert.deepEqual(clearOfToolbar(rect(10, 546, 780, 44), panel, "bottom", view, 10), { bottom: 62 });
-  assert.deepEqual(clearOfToolbar(rightBar, panel, "bottom", view, 10), { right: 62 });
-  assert.deepEqual(clearOfToolbar(rect(10, 10, 300, 44), panel, "top", view, 10), {});
+  assert.deepEqual(clearOfToolbar(rect(10, 10, 780, 44), panel, 800, 10), { top: 62 });
+  assert.deepEqual(clearOfToolbar(rect(746, 10, 44, 580), panel, 800, 10), { right: 62 });
+  assert.deepEqual(clearOfToolbar(rect(10, 10, 300, 44), panel, 800, 10), {});
+  assert.deepEqual(clearOfToolbar(rect(10, 546, 780, 44), panel, 800, 10), {});
 });

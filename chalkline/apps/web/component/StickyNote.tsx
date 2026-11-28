@@ -1,16 +1,17 @@
 "use client";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { Gochi_Hand } from "next/font/google";
 import { Minus, StickyNote as NoteIcon } from "lucide-react";
 import { getNote, saveNote } from "@/draw/http";
-import { clearOfToolbar } from "@/draw/placement";
 import type { Palette } from "@/draw/theme";
+
+/** the note's own handwriting, used nowhere else, so a note never reads as board text */
+const noteHand = Gochi_Hand({ weight: "400", subsets: ["latin"], display: "swap" });
 
 /** the same cap as MAX_NOTE_LENGTH in @repo/common/types, which the server enforces */
 const MAX_LENGTH = 2000;
 /** pause in typing before the note saves */
 const SAVE_AFTER_MS = 600;
-/** gap from the window's corner, the same as the toolbar's */
-const MARGIN = 10;
 
 /** Blank text is no note at all: saving it deletes the note. */
 const asSaved = (text: string) => (text.trim() === "" ? "" : text);
@@ -29,24 +30,24 @@ export function wasNoteOpen(roomId: string): boolean {
 const STATUS_TEXT = { idle: "", saving: "Saving…", saved: "Saved", failed: "Couldn't save" } as const;
 
 /**
- * Your own sticky note on this board, pinned to the bottom-right corner. Only
- * you can see it. Plain text, saved as you type. Once it has text it can only
- * be hidden, which leaves a small "Note" chip; deleting all of its text
- * deletes the note.
+ * Your own sticky note on this board: a "Note" chip beside the people on the
+ * board, with the note dropping down below it. Only you can see it. Plain
+ * text, saved as you type. Once it has text it can only be hidden, which
+ * leaves the chip; deleting all of its text deletes the note.
+ *
+ * Sits in the canvas's top-right corner, which positions it: the box hangs
+ * from that corner's right edge, the same as the people list.
  */
 export function StickyNote({
   roomId,
   open,
   onOpenChange,
   palette,
-  avoid,
 }: {
   roomId: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   palette: Palette;
-  /** the toolbar, which can be docked over this corner */
-  avoid: DOMRect | null;
 }) {
   const [text, setText] = useState("");
   const [load, setLoad] = useState<"loading" | "ready" | "failed">("loading");
@@ -56,10 +57,8 @@ export function StickyNote({
   const saved = useRef("");
   const busy = useRef(false);
   const timer = useRef<number | undefined>(undefined);
-  const rootRef = useRef<HTMLDivElement>(null);
   const fieldRef = useRef<HTMLTextAreaElement>(null);
   const firstOpen = useRef(true);
-  const [placed, setPlaced] = useState<CSSProperties>({});
 
   useEffect(() => {
     if (load !== "loading") return;
@@ -135,18 +134,7 @@ export function StickyNote({
   }, [open]);
 
   const hasNote = text.trim() !== "";
-  const shown = open || hasNote;
-
-  // in the bottom-right corner, unless the toolbar covers it
-  useLayoutEffect(() => {
-    const el = rootRef.current;
-    if (!el || !avoid) return;
-    const panel = { width: el.offsetWidth, height: el.offsetHeight };
-    const view = { width: window.innerWidth, height: window.innerHeight };
-    setPlaced(clearOfToolbar(avoid, panel, "bottom", view, MARGIN));
-  }, [avoid, open, shown]);
-
-  if (!shown) return null;
+  if (!open && !hasNote) return null;
 
   const surface: CSSProperties = {
     background: palette.panel,
@@ -156,31 +144,36 @@ export function StickyNote({
   };
 
   return (
-    <div ref={rootRef} style={{ position: "fixed", bottom: MARGIN, right: MARGIN, zIndex: 30, ...placed }}>
-      {!open ? (
-        <button
-          type="button"
-          onClick={() => onOpenChange(true)}
-          title="Open your note"
-          style={{
-            ...surface,
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            padding: "8px 12px",
-            borderRadius: 999,
-            fontSize: 13,
-            cursor: "pointer",
-          }}
-        >
-          <NoteIcon size={16} aria-hidden />
-          Note
-        </button>
-      ) : (
+    <div>
+      <button
+        type="button"
+        onClick={() => onOpenChange(!open)}
+        aria-expanded={open}
+        title={open ? "Hide your note" : "Open your note"}
+        style={{
+          ...surface,
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          padding: "8px 12px",
+          borderRadius: 999,
+          fontSize: 13,
+          cursor: "pointer",
+        }}
+      >
+        <NoteIcon size={16} aria-hidden />
+        Note
+      </button>
+
+      {open && (
         <section
           aria-label="Your note"
           style={{
             ...surface,
+            position: "absolute",
+            top: "calc(100% + 8px)",
+            right: 0,
+            zIndex: 1,
             width: "min(280px, calc(100vw - 20px))",
             padding: 8,
             borderRadius: 12,
@@ -267,9 +260,9 @@ export function StickyNote({
                 borderRadius: 8,
                 background: "transparent",
                 color: palette.panelText,
-                font: "inherit",
-                fontSize: 14,
-                lineHeight: 1.45,
+                fontFamily: noteHand.style.fontFamily,
+                fontSize: 18,
+                lineHeight: 1.35,
               }}
             />
           )}

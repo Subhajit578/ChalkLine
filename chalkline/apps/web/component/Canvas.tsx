@@ -47,6 +47,7 @@ import { makeNotice, ToastStack, type Notice } from "./Toast";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { BoardPeople } from "./BoardPeople";
 import { StickyNote, wasNoteOpen } from "./StickyNote";
+import { clearOfToolbar } from "@/draw/placement";
 import { saveBoardAsPdf } from "@/lib/pdf";
 import { DEFAULT_FONT_FAMILY, DEFAULT_FONT_SIZE, FONTS } from "@/draw/renderer";
 import type { ConnectionStatus, RoomConnection } from "@/draw/connection";
@@ -125,7 +126,7 @@ export function Canvas({
   // whether any shape is on screen; drives the offer to scroll back
   const [contentVisible, setContentVisible] = useState(true);
   const [gridOn, setGridOn] = useState(true);
-  // where the toolbar sits, so the people stack and the note can stay out from under it
+  // where the toolbar sits, so the top-right corner can stay out from under it
   const [toolbarRect, setToolbarRect] = useState<DOMRect | null>(null);
   const [noteOpen, setNoteOpen] = useState(() => wasNoteOpen(roomId));
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -504,8 +505,10 @@ export function Canvas({
 
       <ToastStack notices={notices} onDismiss={dismissNotice} />
 
-      <BoardPeople roomId={roomId} connection={connection} palette={palette} avoid={toolbarRect} />
-      <StickyNote roomId={roomId} open={noteOpen} onOpenChange={setNoteOpen} palette={palette} avoid={toolbarRect} />
+      <TopRightCorner avoid={toolbarRect}>
+        <StickyNote roomId={roomId} open={noteOpen} onOpenChange={setNoteOpen} palette={palette} />
+        <BoardPeople roomId={roomId} connection={connection} palette={palette} />
+      </TopRightCorner>
 
       <TopBar
         selectedTool={selectedTool}
@@ -532,6 +535,46 @@ export function Canvas({
         viewport={size}
         onPlaced={setToolbarRect}
       />
+    </div>
+  );
+}
+
+/**
+ * The top-right corner: your note's chip beside the faces of the people on the
+ * board, each opening downwards from the corner's right edge. Moves out from
+ * under the toolbar when it is docked over the corner.
+ */
+function TopRightCorner({ avoid, children }: { avoid: DOMRect | null; children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [placed, setPlaced] = useState<CSSProperties>({});
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || !avoid) return;
+    const place = () =>
+      setPlaced(clearOfToolbar(avoid, { width: el.offsetWidth, height: el.offsetHeight }, window.innerWidth, DOCK_MARGIN));
+    place();
+    // the chip and the faces come and go, which changes how much of the corner it covers
+    const resized = new ResizeObserver(place);
+    resized.observe(el);
+    return () => resized.disconnect();
+  }, [avoid]);
+
+  return (
+    <div
+      ref={ref}
+      style={{
+        position: "fixed",
+        top: DOCK_MARGIN,
+        right: DOCK_MARGIN,
+        zIndex: 30,
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        ...placed,
+      }}
+    >
+      {children}
     </div>
   );
 }
